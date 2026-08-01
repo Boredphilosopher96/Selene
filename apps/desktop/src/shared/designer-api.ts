@@ -12,7 +12,7 @@ import type {
 import { canonicalGitHubOwnerLogin, canonicalGitHubRepository } from './github-repository';
 
 /** Versioned, data-only contract exposed by the Electron preload bridge. */
-export const DESIGNER_API_VERSION = 'selene-desktop-designer/v18' as const;
+export const DESIGNER_API_VERSION = 'selene-desktop-designer/v19' as const;
 
 /** Fail clearly when a renderer and host from different desktop releases are mixed. */
 export function assertDesignerApiVersion(
@@ -1211,17 +1211,6 @@ export interface ArtifactSelectionReceipt {
   readonly receiptId: string;
 }
 
-/** Host-only target retained behind an opaque selection receipt. */
-export interface AuthenticatedArtifactElementTarget {
-  readonly format: 'selene-authenticated-artifact-element-target/v1';
-  readonly anchor: SpatialTargetInput;
-  readonly projectId: string;
-  readonly nodeRef: string;
-  readonly revisionId: string;
-  /** Opaque binding commitment minted by the current host preview ticket. */
-  readonly bindingId: string;
-}
-
 /** Historical display data only; it never grants source or compiler authority. */
 export interface AIChangeHistoryTarget extends SpatialTargetInput {
   readonly artifactId: string;
@@ -1680,33 +1669,6 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
   };
 }
 
-export function validateAuthenticatedArtifactElementTarget(
-  value: unknown
-): AuthenticatedArtifactElementTarget {
-  const input = exactInputRecord(value, 'authenticated artifact element target', [
-    'anchor',
-    'bindingId',
-    'format',
-    'nodeRef',
-    'projectId',
-    'revisionId'
-  ]);
-  if (input.format !== 'selene-authenticated-artifact-element-target/v1')
-    throw new Error('authenticated artifact element target format is invalid');
-  const anchor = validateAuthenticatedSpatialTarget(input.anchor);
-  const nodeRef = validateDesignerIdentifier(input.nodeRef, 'target nodeRef');
-  if (anchor.nodeRef !== nodeRef)
-    throw new Error('authenticated artifact element target nodeRef must match its anchor');
-  return Object.freeze({
-    format: 'selene-authenticated-artifact-element-target/v1',
-    anchor,
-    projectId: validateDesignerIdentifier(input.projectId, 'target projectId'),
-    nodeRef,
-    revisionId: validateDesignerIdentifier(input.revisionId, 'target revisionId'),
-    bindingId: validateDesignerIdentifier(input.bindingId, 'target bindingId')
-  });
-}
-
 export function validateArtifactSelectionReceiptRequest(
   value: unknown
 ): ArtifactSelectionReceiptRequest {
@@ -1719,6 +1681,11 @@ export function validateArtifactSelectionReceiptRequest(
     throw new Error('artifact selection receipt request format is invalid');
   if (input.purpose !== 'direct-ai' && input.purpose !== 'review-thread')
     throw new Error('artifact selection receipt request purpose is invalid');
+  if (
+    typeof input.previewBindingId !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(input.previewBindingId)
+  )
+    throw new Error('selection preview binding is invalid');
   const anchor = validateAuthenticatedSpatialTarget(input.anchor);
   if (anchor.nodeRef === undefined)
     throw new Error('artifact selection receipt request requires a compiler-mapped node');
@@ -1726,12 +1693,7 @@ export function validateArtifactSelectionReceiptRequest(
     format: 'selene-artifact-selection-receipt-request/v1',
     projectId: validateDesignerIdentifier(input.projectId, 'selection projectId'),
     revisionId: validateDesignerIdentifier(input.revisionId, 'selection revisionId'),
-    previewBindingId:
-      typeof input.previewBindingId === 'string' && /^[a-f0-9]{64}$/.test(input.previewBindingId)
-        ? input.previewBindingId
-        : (() => {
-            throw new Error('selection preview binding is invalid');
-          })(),
+    previewBindingId: input.previewBindingId,
     purpose: input.purpose,
     anchor
   });

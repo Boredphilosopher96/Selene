@@ -97,9 +97,7 @@ export function requestOutcome(request: AIChangeRequest): string {
   }
 }
 
-export function targetSummary(
-  target?: Pick<SpatialTargetInput, 'nodeRef'>
-): string {
+export function targetSummary(target?: Pick<SpatialTargetInput, 'nodeRef'>): string {
   return target?.nodeRef === undefined
     ? 'Selected compiler-authenticated React element'
     : `Selected React element: ${target.nodeRef}`;

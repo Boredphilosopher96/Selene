@@ -15,7 +15,7 @@ import {
 import { ElectronAgentHost, type AgentHostLaunchConfig } from './agent-host';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesignerAgentAdapter, DesignerGenerationContext } from './designer-service';
-import type { AuthenticatedArtifactElementTarget } from '../shared/designer-api';
+import type { AuthenticatedArtifactElementTarget } from './authenticated-artifact-target';
 import { type DesignerAgentSummary, validateDesignerIdentifier } from '../shared/designer-api';
 
 export const TRUSTED_AGENT_CONFIG_VERSION = 'selene-desktop-agents/v1' as const;

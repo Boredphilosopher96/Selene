@@ -94,7 +94,6 @@ import {
   type HostedStakeholderReviewStatus,
   type AIChangeRequest,
   type AIChangeHistoryTarget,
-  type AuthenticatedArtifactElementTarget,
   type ArtifactSelectionReceipt,
   type ArtifactSelectionReceiptRequest,
   type ArtifactPin,
@@ -120,6 +119,7 @@ import {
   validateReviewThreadReply,
   validateStoryPreviewTicket
 } from '../shared/designer-api';
+import type { AuthenticatedArtifactElementTarget } from './authenticated-artifact-target';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
 import type {
@@ -5643,6 +5643,9 @@ export class DesktopDesignerApplicationService {
           );
           return { status: 'unavailable' as const };
         }
+        // A newly activated host build replaces the preview authority even when
+        // its descriptive source revision has not changed.
+        this.artifactSelectionReceipts.clear();
         this.compilerTargetEvidence = evidence;
         this.manualReactEditAuthority = this.mintManualReactEditAuthority(evidence, artifact);
         if (candidate === undefined) {
@@ -5780,7 +5783,9 @@ export class DesktopDesignerApplicationService {
         this.artifactSelectionReceipts.size >=
         DesktopDesignerApplicationService.maximumArtifactSelectionReceipts
       )
-        throw new DesignerApplicationError('Too many selection receipts are active. Select the element again.');
+        throw new DesignerApplicationError(
+          'Too many selection receipts are active. Select the element again.'
+        );
       const receiptId = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 32);
       this.artifactSelectionReceipts.set(receiptId, {
         purpose: selection.purpose,
@@ -5874,6 +5879,7 @@ export class DesktopDesignerApplicationService {
   private revokeReactBindingAuthority(): void {
     this.reactBinding = undefined;
     this.compilerTargetEvidence = undefined;
+    this.artifactSelectionReceipts.clear();
   }
 
   private restoreMutationState(

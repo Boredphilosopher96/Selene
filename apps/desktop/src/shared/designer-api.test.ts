@@ -131,6 +131,9 @@ describe('desktop designer API version', () => {
   });
 
   it('rejects stale and unknown host contracts clearly', () => {
+    expect(() => assertDesignerApiVersion('selene-desktop-designer/v18')).toThrow(
+      /Unsupported desktop designer API version/
+    );
     expect(() => assertDesignerApiVersion('selene-desktop-designer/v17')).toThrow(
       /Unsupported desktop designer API version/
     );

@@ -1179,12 +1179,9 @@ describe('desktop designer application service', () => {
       }
     });
     const snapshot = service.snapshot();
-    await expect(
-      service.addReviewThread({
-        body: 'Receipt-free targets must be rejected.',
-        selectionReceipt: await currentPreviewReviewSelectionReceiptFor(service)
-      })
-    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(currentPreviewReviewSelectionReceiptFor(service)).rejects.toThrow(
+      /compiler-authenticated element/
+    );
     await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
       status: 'activated'
     });
@@ -1414,12 +1411,9 @@ describe('desktop designer application service', () => {
     });
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
-    await expect(
-      reader.addReviewThread({
-        body: 'A stale receipt cannot authorize a new compiler-bound review.',
-        selectionReceipt: await currentPreviewReviewSelectionReceiptFor(reader)
-      })
-    ).rejects.toThrow(/compiler-authenticated element/);
+    await expect(currentPreviewReviewSelectionReceiptFor(reader)).rejects.toThrow(
+      /compiler-authenticated element/
+    );
   });
   it('keeps persisted binding data inert until post-hydration host validation and discards stale data', async () => {
     const state = fixtureProjectState();
@@ -1453,6 +1447,117 @@ describe('desktop designer application service', () => {
 
     expect(state.reactBinding).toBeUndefined();
     expect(state.pendingReactBinding).toBeUndefined();
+  });
+
+  it('revokes an issued direct-AI selection receipt with compiler authority', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const selectionReceipt = await authenticatedSelectionReceiptFor(service);
+
+    await service.savePrototypeGraph(service.snapshot().editablePrototype.graph);
+
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A revoked receipt must not be replayed.',
+        selectionReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('clears outstanding selection receipts when a host preview build is activated', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const selectionReceipt = await authenticatedSelectionReceiptFor(service);
+
+    await service.activateReactBindingReceipt(buildArtifact(service.snapshot()));
+
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A prior preview receipt must not survive host activation.',
+        selectionReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('rejects forged, cross-purpose, and replayed selection receipts', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const forged = {
+      format: 'selene-artifact-selection-receipt/v1' as const,
+      receiptId: 'f'.repeat(32)
+    };
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'A forged receipt must not authorize AI.',
+        selectionReceipt: forged
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const directReceipt = await authenticatedSelectionReceiptFor(service);
+    await expect(
+      service.addReviewThread({
+        body: 'Direct-AI authority must not create a review thread.',
+        selectionReceipt: directReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const reviewReceipt = await reviewSelectionReceiptFor(service);
+    await expect(
+      service.requestAIChange({
+        kind: 'authenticated-element',
+        agentId: 'fixture-designer',
+        instruction: 'Review authority must not start direct AI.',
+        selectionReceipt: reviewReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+
+    const replayReceipt = await reviewSelectionReceiptFor(service);
+    await service.addReviewThread({
+      body: 'Consume this review receipt once.',
+      selectionReceipt: replayReceipt
+    });
+    await expect(
+      service.addReviewThread({
+        body: 'A consumed receipt must not be replayed.',
+        selectionReceipt: replayReceipt
+      })
+    ).rejects.toThrow(/selection receipt is unavailable/);
+  });
+
+  it('keeps each current mapped node bound to its own opaque receipt', async () => {
+    const service = fixtureService();
+    const { workspace, binding } = matchedBindingWorkspace(service.snapshot());
+    const [firstNode, secondNode] = workspace.nodes;
+    if (firstNode === undefined || secondNode === undefined)
+      throw new Error('Fixture needs two independently mapped compiler nodes.');
+    await service.openProjectWorkspace(workspace);
+    hostBindingState(service).reactBinding = binding;
+
+    const firstReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
+      ...target,
+      nodeRef: firstNode.nodeId
+    });
+    const secondReceipt = await currentPreviewReviewSelectionReceiptFor(service, {
+      ...target,
+      nodeRef: secondNode.nodeId
+    });
+    const first = await service.addReviewThread({
+      body: 'First mapped node.',
+      selectionReceipt: firstReceipt
+    });
+    const second = await service.addReviewThread({
+      body: 'Second mapped node.',
+      selectionReceipt: secondReceipt
+    });
+
+    expect(first.reviewThreads.at(-1)?.anchor.nodeRef).toBe(firstNode.nodeId);
+    expect(second.reviewThreads.at(-1)?.anchor.nodeRef).toBe(secondNode.nodeId);
   });
 
   it('invalidates host binding state through the public AI source-mutation path', async () => {
