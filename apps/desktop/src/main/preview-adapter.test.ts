@@ -168,11 +168,11 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
     );
-    // Canvas-mode selection is published once from trusted pointerdown. The
-    // document click listener must not emit a second select-node report for
-    // the same physical gesture.
+    // Canvas-mode selection is published first from trusted pointerdown. The
+    // document click listener only falls back when that event was absent, and
+    // never emits a second select-node report for the same physical gesture.
     expect(inlineModule).toContain(
-      "if(canvasNavigationEnabled)return;if(markedNode){const nodeId=markedNode.getAttribute('data-selene-node-id')||'';"
+      "if(canvasNavigationEnabled){if(canvasPointerSelection){canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[]);return}const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}"
     );
     expect(inlineModule).not.toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
@@ -274,7 +274,9 @@ describe('isolated preview transport', () => {
       "report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(unsupportedClear);
-    expect(inlineModule).toContain('if(canvasNavigationEnabled)return;if(markedNode){');
+    expect(inlineModule).toContain(
+      'if(canvasNavigationEnabled){if(canvasPointerSelection){canvasPointerSelection=false;'
+    );
     const clickNavigation = inlineModule.indexOf(
       'if(canvasNavigationEnabled)',
       inlineModule.indexOf(actionCapture)
