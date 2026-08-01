@@ -1563,6 +1563,22 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         });
         return { action, geometry };
       };
+      const reselectEditedAction = async () => {
+        const refreshedAction = await previewFrameAction({
+          label: 'Review orders',
+          nodeId: 'dashboard',
+          portId: 'open-orders'
+        });
+        await window.mouse.click(
+          refreshedAction.geometry.action.center.x,
+          refreshedAction.geometry.action.center.y
+        );
+        const toolbar = window.getByRole('toolbar', {
+          name: 'Selected React element actions'
+        });
+        await expect(toolbar).toBeVisible();
+        return toolbar;
+      };
       const previewNavigationEvidence = async () =>
         prototype.locator('main').evaluate((main) => ({
           route: window.location.pathname,
@@ -1799,19 +1815,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       // A source-changing edit replaces the preview revision and revokes its
       // physical proof. Reselect the compiler-mapped element in the new frame
       // before continuing with another privileged design operation.
-      const refreshedAction = await previewFrameAction({
-        label: 'Review orders',
-        nodeId: 'dashboard',
-        portId: 'open-orders'
-      });
-      await window.mouse.click(
-        refreshedAction.geometry.action.center.x,
-        refreshedAction.geometry.action.center.y
-      );
-      const refreshedElementActions = window.getByRole('toolbar', {
-        name: 'Selected React element actions'
-      });
-      await expect(refreshedElementActions).toBeVisible();
+      const refreshedElementActions = await reselectEditedAction();
       await refreshedElementActions.getByRole('button', { name: 'Inspect' }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
       const developerDetails = window.getByLabel('Selection developer details');
@@ -1860,6 +1864,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       expect(directManipulationPerformance.layoutEditMs).toBeLessThanOrEqual(
         directEditRoundTripBudgetMs
       );
+      await reselectEditedAction();
       const autoLayoutToolbar = window.getByRole('toolbar', {
         name: 'Selected container auto layout'
       });
@@ -1929,6 +1934,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preAutoLayoutFrame);
+      await reselectEditedAction();
       await expect(autoLayoutToolbar.getByLabel('Current container gap')).toHaveText('Gap 5px');
       diagnostics.push(
         `artifact auto layout source revision: ${preAutoLayoutRevision} -> ${appliedAutoLayoutSourceRevision}`
@@ -1970,6 +1976,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preResizeFrame);
+      await reselectEditedAction();
       await expect(resizeHandle).toBeVisible();
       await expect(resizeHandle).not.toHaveAttribute('aria-label', resizeHandleBefore ?? '');
       directManipulationPerformance.resizeEditMs = Date.now() - resizeEditStartedAt;
@@ -2030,6 +2037,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preKeyboardMoveFrame);
+      await reselectEditedAction();
       await expect(moveHandle).toBeVisible();
 
       const preCancelledMoveRevision = keyboardMoveSourceRevision;
@@ -2121,6 +2129,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect
         .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
         .not.toBe(preMoveFrame);
+      await reselectEditedAction();
       await expect(moveHandle).toBeVisible();
       await expect(resizeHandle).toBeVisible();
       directManipulationPerformance.moveEditMs = Date.now() - moveEditStartedAt;
