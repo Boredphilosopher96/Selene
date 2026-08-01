@@ -16,13 +16,21 @@ const require = createRequire(import.meta.url);
 const startupOutputLimit = 16_384;
 
 interface PresentationPaintEvidence {
+  readonly columnSpan: number;
   readonly height: number;
   readonly nonWhitePixels: number;
   readonly nonWhiteRatio: number;
+  readonly paintedColumns: number;
+  readonly paintedRows: number;
+  readonly rowSpan: number;
+  readonly topLeftNonWhitePixels: number;
   readonly width: number;
 }
 
-/** Read only the compositor screenshot, excluding the fixed Exit control's corner. */
+/**
+ * Read only the viewport compositor screenshot. Edge strips and the fixed
+ * Exit control cannot count as proof that the compiled artifact painted.
+ */
 function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
   if (signature.some((value, index) => png[index] !== value))
@@ -72,8 +80,18 @@ function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
     throw new Error('Presentation PNG rows are incomplete.');
   const previous = new Uint8Array(rowBytes);
   const current = new Uint8Array(rowBytes);
+  const insetX = Math.max(24, Math.floor(width * 0.02));
+  const insetTop = Math.max(24, Math.floor(height * 0.03));
+  const insetBottom = Math.max(32, Math.floor(height * 0.04));
   let nonWhitePixels = 0;
   let eligiblePixels = 0;
+  let topLeftNonWhitePixels = 0;
+  let firstPaintedColumn = width;
+  let lastPaintedColumn = -1;
+  let firstPaintedRow = height;
+  let lastPaintedRow = -1;
+  const paintedColumns = new Set<number>();
+  const paintedRows = new Set<number>();
   let offset = 0;
   const paeth = (left: number, up: number, upLeft: number) => {
     const prediction = left + up - upLeft;
@@ -109,9 +127,10 @@ function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
                     })();
     }
     for (let x = 0; x < width; x += 1) {
-      // The only chrome in Present is its top-right Exit control. It cannot
-      // count as proof that the compiled artifact itself painted.
-      if (x >= width - 240 && y < 100) continue;
+      const withinArtifactInterior =
+        x >= insetX && x < width - insetX && y >= insetTop && y < height - insetBottom;
+      const isExitControl = x >= width - 240 && y < 100;
+      if (!withinArtifactInterior || isExitControl) continue;
       const pixel = x * channels;
       const gray = current[pixel];
       const red = colorType === 0 || colorType === 4 ? gray : current[pixel];
@@ -120,14 +139,28 @@ function presentationPaintEvidence(png: Uint8Array): PresentationPaintEvidence {
       const alpha =
         colorType === 6 ? current[pixel + 3] : colorType === 4 ? current[pixel + 1] : 255;
       eligiblePixels += 1;
-      if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) nonWhitePixels += 1;
+      if (alpha > 0 && (red < 245 || green < 245 || blue < 245)) {
+        nonWhitePixels += 1;
+        firstPaintedColumn = Math.min(firstPaintedColumn, x);
+        lastPaintedColumn = Math.max(lastPaintedColumn, x);
+        firstPaintedRow = Math.min(firstPaintedRow, y);
+        lastPaintedRow = Math.max(lastPaintedRow, y);
+        paintedColumns.add(x);
+        paintedRows.add(y);
+        if (x < width * 0.6 && y < height * 0.6) topLeftNonWhitePixels += 1;
+      }
     }
     previous.set(current);
   }
   return {
+    columnSpan: Math.max(0, lastPaintedColumn - firstPaintedColumn + 1),
     height,
     nonWhitePixels,
     nonWhiteRatio: eligiblePixels === 0 ? 0 : nonWhitePixels / eligiblePixels,
+    paintedColumns: paintedColumns.size,
+    paintedRows: paintedRows.size,
+    rowSpan: Math.max(0, lastPaintedRow - firstPaintedRow + 1),
+    topLeftNonWhitePixels,
     width
   };
 }
@@ -981,13 +1014,18 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           async () => {
             const raster = await window.screenshot({
               animations: 'disabled',
-              caret: 'hide',
-              fullPage: true
+              caret: 'hide'
             });
             const evidence = presentationPaintEvidence(raster);
             frames.push(evidence);
             const visiblyPainted =
-              evidence.nonWhitePixels >= 2_048 && evidence.nonWhiteRatio >= 0.005;
+              evidence.nonWhitePixels >= 2_048 &&
+              evidence.nonWhiteRatio >= 0.005 &&
+              evidence.topLeftNonWhitePixels >= 512 &&
+              evidence.paintedRows >= Math.max(32, evidence.height * 0.08) &&
+              evidence.paintedColumns >= Math.max(64, evidence.width * 0.08) &&
+              evidence.rowSpan >= evidence.height * 0.2 &&
+              evidence.columnSpan >= evidence.width * 0.2;
             consecutiveVisibleArtifactFrames = visiblyPainted
               ? consecutiveVisibleArtifactFrames + 1
               : 0;
@@ -1011,7 +1049,15 @@ test('renders one compiled React artboard with prototype wiring on the unified d
           body: JSON.stringify(
             {
               frames,
-              threshold: { minimumNonWhitePixels: 2_048, minimumNonWhiteRatio: 0.005 }
+              threshold: {
+                minimumColumnSpanRatio: 0.2,
+                minimumNonWhitePixels: 2_048,
+                minimumNonWhiteRatio: 0.005,
+                minimumPaintedColumnRatio: 0.08,
+                minimumPaintedRowRatio: 0.08,
+                minimumRowSpanRatio: 0.2,
+                minimumTopLeftNonWhitePixels: 512
+              }
             },
             null,
             2
