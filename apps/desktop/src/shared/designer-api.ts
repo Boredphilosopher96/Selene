@@ -1666,11 +1666,14 @@ export function validateSpatialTarget(value: unknown): SpatialTargetInput {
 export function validateAuthenticatedArtifactElementTarget(
   value: unknown
 ): AuthenticatedArtifactElementTarget {
-  const input = exactInputRecord(
-    value,
-    'authenticated artifact element target',
-    ['anchor', 'bindingId', 'format', 'nodeRef', 'projectId', 'revisionId']
-  );
+  const input = exactInputRecord(value, 'authenticated artifact element target', [
+    'anchor',
+    'bindingId',
+    'format',
+    'nodeRef',
+    'projectId',
+    'revisionId'
+  ]);
   if (input.format !== 'selene-authenticated-artifact-element-target/v1')
     throw new Error('authenticated artifact element target format is invalid');
   const anchor = validateAuthenticatedSpatialTarget(input.anchor);

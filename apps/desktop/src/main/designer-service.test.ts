@@ -3882,7 +3882,9 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         reviewThreadId: thread.id
       })
     ).rejects.toThrow(/compiler-authenticated element/);
-    await expect(reader.activateReactBindingReceipt(buildArtifact(reader.snapshot()))).resolves.toEqual({
+    await expect(
+      reader.activateReactBindingReceipt(buildArtifact(reader.snapshot()))
+    ).resolves.toEqual({
       status: 'activated'
     });
     await expect(

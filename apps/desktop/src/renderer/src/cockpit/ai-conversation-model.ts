@@ -87,7 +87,8 @@ export function mintAuthenticatedAiTarget({
   if (bindingId === undefined)
     return {
       kind: 'unavailable',
-      message: 'The current preview build is unavailable. Refresh the preview, then reselect the element.'
+      message:
+        'The current preview build is unavailable. Refresh the preview, then reselect the element.'
     };
   if (anchor.nodeRef === undefined)
     return {

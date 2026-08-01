@@ -39,10 +39,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
-import {
-  isCurrentProjectOwner,
-  mintAuthenticatedAiTarget
-} from './ai-conversation-model';
+import { isCurrentProjectOwner, mintAuthenticatedAiTarget } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
