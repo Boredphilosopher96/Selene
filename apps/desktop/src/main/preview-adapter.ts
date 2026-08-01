@@ -149,9 +149,7 @@ function selectionProofRejection(
       : 'Preview selection proof is unavailable',
     {
       status: 403,
-      headers: diagnosticsEnabled
-        ? { ...headers, 'X-Selene-Selection-Diagnostic': reason }
-        : headers
+      headers: { ...headers, 'X-Selene-Selection-Diagnostic': reason }
     }
   );
 }
