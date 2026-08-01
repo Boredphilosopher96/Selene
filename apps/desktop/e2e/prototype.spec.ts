@@ -1011,15 +1011,14 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           exact: true
         });
         if (!(await dashboard.isVisible())) {
-          if (await runDashboardScenario.isVisible()) await runDashboardScenario.click();
-          else {
-            const openDashboard = window.getByRole('button', {
-              name: 'Open Dashboard',
-              exact: true
-            });
-            await expect(openDashboard).toBeVisible();
-            await openDashboard.click();
+          if (!(await runDashboardScenario.isVisible())) {
+            const pages = window
+              .getByLabel('Design canvas')
+              .getByRole('button', { name: 'Pages', exact: true });
+            if (await pages.isVisible()) await pages.click();
           }
+          await expect(runDashboardScenario).toBeVisible();
+          await runDashboardScenario.click();
         }
         await expect(dashboard).toBeVisible({ timeout: previewPresentationTimeout });
         await expect
