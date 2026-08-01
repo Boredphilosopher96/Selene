@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 
 import type {
-  AuthenticatedArtifactElementTarget,
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   AIChangeRequest,
   AIChangeRequestInput,
   AIChangeUndoInput,
@@ -27,6 +28,9 @@ export interface AIConversationWorkspaceActions {
   snapshot(): Promise<DesignerSnapshot>;
   selectAgent(agentId: string): Promise<DesignerSnapshot>;
   requestAIChange(input: AIChangeRequestInput): Promise<DesignerSnapshot>;
+  mintArtifactSelectionReceipt(
+    request: ArtifactSelectionReceiptRequest
+  ): Promise<ArtifactSelectionReceipt>;
   acceptAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
   rejectAIProposal(input: AIProposalDecisionInput): Promise<DesignerSnapshot>;
   cancelAIChange(requestId: string): Promise<void>;
@@ -37,7 +41,7 @@ export interface AIConversationWorkspaceActions {
 export interface AIConversationWorkspaceProps {
   readonly snapshot: DesignerSnapshot;
   readonly progress?: DesignerProgress;
-  readonly target: AuthenticatedArtifactElementTarget | undefined;
+  readonly target: ArtifactSelectionReceiptRequest | undefined;
   readonly status: string;
   readonly actions: AIConversationWorkspaceActions;
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
@@ -80,6 +84,7 @@ export function AIConversationWorkspace({
 }: AIConversationWorkspaceProps) {
   const [instruction, setInstruction] = useState('Clarify the primary action.');
   const [aiSubmitting, setAiSubmitting] = useState(false);
+  const [selectionMinting, setSelectionMinting] = useState(false);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | undefined>(undefined);
   const [undoingRequestId, setUndoingRequestId] = useState<string | undefined>(undefined);
   const [undoStatus, setUndoStatus] = useState<string | undefined>(undefined);
@@ -88,6 +93,7 @@ export function AIConversationWorkspace({
   >(undefined);
   const [visibleRequestCount, setVisibleRequestCount] = useState(12);
   const aiSubmittingRef = useRef(false);
+  const selectionMintingRef = useRef(false);
   const operationToken = useRef(0);
   const projectIdRef = useRef(snapshot.source.projectId);
   const mountedProjectId = useRef(snapshot.source.projectId);
@@ -122,7 +128,7 @@ export function AIConversationWorkspace({
       : undefined;
   const activeRequestId = persistedActive?.id ?? progressRequestId;
   const requestActive =
-    aiSubmitting || persistedActive !== undefined || progressRequestId !== undefined;
+    aiSubmitting || selectionMinting || persistedActive !== undefined || progressRequestId !== undefined;
   const conversationBusy = isConversationBusy({
     requestActive,
     undoActive:
@@ -143,7 +149,7 @@ export function AIConversationWorkspace({
           agentAvailable: selectedAgent !== undefined,
           requestActive: conversationBusy,
           instruction,
-          target
+          selection: target
         })
       : 'Accept, reject, or revise the staged proposal before sending another request.';
   const visibleActivity = snapshot.designActivity.slice(-visibleRequestCount);
@@ -175,8 +181,10 @@ export function AIConversationWorkspace({
     mountedProjectId.current = snapshot.source.projectId;
     operationToken.current += 1;
     aiSubmittingRef.current = false;
+    selectionMintingRef.current = false;
     localSubmissionProjectId.current = undefined;
     setAiSubmitting(false);
+    setSelectionMinting(false);
     undoSubmittingRef.current = false;
     setUndoingRequestId(undefined);
     setUndoStatus(undefined);
@@ -385,18 +393,43 @@ export function AIConversationWorkspace({
     })();
   };
 
-  const requestTargetedChange = () => {
-    if (target === undefined || selectedAgent === undefined || disabledReason !== undefined) return;
-    submit(
-      {
-        kind: 'authenticated-element',
-        agentId: snapshot.selectedAgentId,
-        instruction: instruction.trim(),
-        target
-      },
-      'composer'
-    );
+  const submitWithCurrentSelection = (
+    source: 'composer' | 'retry',
+    request?: AIChangeRequest
+  ) => {
+    if (
+      target === undefined ||
+      selectionMintingRef.current ||
+      (source === 'composer' && (selectedAgent === undefined || disabledReason !== undefined))
+    )
+      return;
+    selectionMintingRef.current = true;
+    setSelectionMinting(true);
+    void actions
+      .mintArtifactSelectionReceipt(target)
+      .then((selectionReceipt) => {
+        const input =
+          source === 'composer'
+            ? {
+                kind: 'authenticated-element' as const,
+                agentId: snapshot.selectedAgentId,
+                instruction: instruction.trim(),
+                selectionReceipt
+              }
+            : request === undefined
+              ? undefined
+              : requestInput(request, selectionReceipt);
+        if (input === undefined)
+          throw new Error('The saved request no longer accepts the current selection.');
+        submit(input, source);
+      })
+      .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'selection')))
+      .finally(() => {
+        selectionMintingRef.current = false;
+        setSelectionMinting(false);
+      });
   };
+  const requestTargetedChange = () => submitWithCurrentSelection('composer');
   const retry = (request: AIChangeRequest) => {
     if (
       (request.status !== 'failed' && request.status !== 'cancelled') ||
@@ -404,14 +437,13 @@ export function AIConversationWorkspace({
     )
       return;
     if (undoSubmittingRef.current || !canStartOperation) return;
-    const input = requestInput(request, target);
-    if (input === undefined) {
+    if (target === undefined) {
       onStatusChange(
         'This saved targeted request needs a current compiler-authenticated selection. Select an element on the canvas, then retry.'
       );
       return;
     }
-    submit(input, 'retry');
+    submitWithCurrentSelection('retry', request);
   };
   const cancel = (requestId: string) => {
     if (

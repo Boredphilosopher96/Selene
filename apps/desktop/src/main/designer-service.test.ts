@@ -545,6 +545,29 @@ function authenticatedTargetFor(
   };
 }
 
+async function authenticatedSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target,
+  purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
+) {
+  const current = authenticatedTargetFor(service, anchor);
+  return service.mintArtifactSelectionReceipt({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    projectId: current.projectId,
+    revisionId: current.revisionId,
+    previewBindingId: current.bindingId,
+    purpose,
+    anchor: current.anchor
+  });
+}
+
+function reviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  return authenticatedSelectionReceiptFor(service, anchor, 'review-thread');
+}
+
 /** Renderer-shaped input minted from the visible current preview ticket without mutating host state. */
 function currentPreviewTargetFor(
   service: DesktopDesignerApplicationService,
@@ -563,6 +586,29 @@ function currentPreviewTargetFor(
     bindingId,
     anchor: { ...anchor, nodeRef }
   };
+}
+
+async function currentPreviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target,
+  purpose: 'direct-ai' | 'review-thread' = 'direct-ai'
+) {
+  const current = currentPreviewTargetFor(service, anchor);
+  return service.mintArtifactSelectionReceipt({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    projectId: current.projectId,
+    revisionId: current.revisionId,
+    previewBindingId: current.bindingId,
+    purpose,
+    anchor: current.anchor
+  });
+}
+
+function currentPreviewReviewSelectionReceiptFor(
+  service: DesktopDesignerApplicationService,
+  anchor: SpatialTargetInput = target
+) {
+  return currentPreviewSelectionReceiptFor(service, anchor, 'review-thread');
 }
 
 function textCapabilityFixture(
@@ -1136,16 +1182,15 @@ describe('desktop designer application service', () => {
     await expect(
       service.addReviewThread({
         body: 'Receipt-free targets must be rejected.',
-        target: currentPreviewTargetFor(service)
+        selectionReceipt: await currentPreviewReviewSelectionReceiptFor(service)
       })
     ).rejects.toThrow(/compiler-authenticated element/);
     await expect(service.activateReactBindingReceipt(buildArtifact(snapshot))).resolves.toEqual({
       status: 'activated'
     });
-    const compilerTarget = currentPreviewTargetFor(service);
     const reviewed = await service.addReviewThread({
       body: 'Fresh compiler receipt authorizes this thread.',
-      target: compilerTarget
+      selectionReceipt: await currentPreviewReviewSelectionReceiptFor(service)
     });
     const reviewThread = reviewed.reviewThreads.at(-1);
     if (reviewThread === undefined)
@@ -1315,11 +1360,15 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).reactBinding).toBeUndefined();
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
     await expect(
-      reader.addReviewThread({
-        body: 'A prior graph ticket cannot authorize a new compiler-bound review.',
-        target: oldTarget
+      reader.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        projectId: oldTarget.projectId,
+        revisionId: oldTarget.revisionId,
+        previewBindingId: oldTarget.bindingId,
+        purpose: 'review-thread',
+        anchor: oldTarget.anchor
       })
-    ).rejects.toThrow(/compiler-authenticated element/);
+    ).rejects.toThrow(/older preview build|compiler-authenticated element/);
   });
   it('does not activate a completed artifact after a newer source revision supersedes it', async () => {
     const state = fixtureProjectState();
@@ -1357,7 +1406,7 @@ describe('desktop designer application service', () => {
       kind: 'authenticated-element',
       agentId: 'stable-source-revision-fixture',
       instruction: 'Revise the primary action.',
-      target: authenticatedTargetFor(reader)
+      selectionReceipt: await authenticatedSelectionReceiptFor(reader)
     });
 
     await expect(reader.activateReactBindingReceipt(completedArtifact)).resolves.toEqual({
@@ -1368,7 +1417,7 @@ describe('desktop designer application service', () => {
     await expect(
       reader.addReviewThread({
         body: 'A stale receipt cannot authorize a new compiler-bound review.',
-        target: currentPreviewTargetFor(reader)
+        selectionReceipt: await currentPreviewReviewSelectionReceiptFor(reader)
       })
     ).rejects.toThrow(/compiler-authenticated element/);
   });
@@ -1417,7 +1466,7 @@ describe('desktop designer application service', () => {
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Revise the primary action.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
 
     expect(state.reactBinding).toBeUndefined();
@@ -2556,7 +2605,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const created = await service.addReviewThread({
       body: 'Check the owner affordance.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const thread = created.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -2618,11 +2667,11 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const [firstSnapshot, secondSnapshot] = await Promise.all([
       first.addReviewThread({
         body: 'First profile review.',
-        target: authenticatedTargetFor(first)
+        selectionReceipt: await reviewSelectionReceiptFor(first)
       }),
       second.addReviewThread({
         body: 'Second profile review.',
-        target: authenticatedTargetFor(second)
+        selectionReceipt: await reviewSelectionReceiptFor(second)
       })
     ]);
     expect(firstSnapshot.reviewThreads.at(-1)?.author).not.toBe(
@@ -2642,7 +2691,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     await writer.markReadyForReview();
     const reviewed = await writer.addReviewThread({
       body: 'Legacy local review.',
-      target: authenticatedTargetFor(writer)
+      selectionReceipt: await reviewSelectionReceiptFor(writer)
     });
     const review = reviewed.reviewThreads.at(-1);
     if (review === undefined) throw new Error('Legacy review thread was not created.');
@@ -2655,7 +2704,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Create a legacy-attributed revision.',
-      target: authenticatedTargetFor(writer)
+      selectionReceipt: await authenticatedSelectionReceiptFor(writer)
     });
     const source = writer.snapshot().source;
     const stored = persisted.read();
@@ -2751,7 +2800,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const reviewed = await service.addReviewThread({
       body: 'Review the orders screen.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     expect(reviewed.reviewThreads.at(-1)?.anchor).toMatchObject({
       artifactId: before.source.projectId,
@@ -3636,7 +3685,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'capturing-guidance',
       instruction: 'Apply guidance.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(received).toEqual([['# Second\n\nTwo.', '# First\n\nOne.']]);
   });
@@ -3660,7 +3709,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'isolated-guidance',
       instruction: 'No carried guidance.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(received).toEqual([[]]);
   });
@@ -3861,49 +3910,50 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const persisted = fixtureProjectState();
     const service = fixtureService({ projectState: persisted.port });
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
-    const authenticatedTarget = authenticatedTargetFor(service);
-
     await expect(
       service.addReviewThread({ body: 'Reject point-only review input.', anchor: target })
     ).rejects.toThrow(/fields are invalid/);
+    const current = authenticatedTargetFor(service);
     await expect(
-      service.requestAIChange({
-        kind: 'authenticated-element',
-        agentId: 'fixture-designer',
-        instruction: 'Reject an unknown node.',
-        target: {
-          ...authenticatedTarget,
-          nodeRef: 'source:unknown',
-          anchor: { ...authenticatedTarget.anchor, nodeRef: 'source:unknown' }
-        }
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        projectId: current.projectId,
+        revisionId: current.revisionId,
+        previewBindingId: current.bindingId,
+        purpose: 'direct-ai',
+        anchor: { ...current.anchor, nodeRef: 'source:unknown' }
       })
     ).rejects.toThrow(/compiler-authenticated element/);
     await expect(
-      service.requestAIChange({
-        kind: 'authenticated-element',
-        agentId: 'fixture-designer',
-        instruction: 'Reject a stale revision.',
-        target: { ...authenticatedTarget, revisionId: 'desktop-designer-r0' }
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        projectId: current.projectId,
+        revisionId: 'desktop-designer-r0',
+        previewBindingId: current.bindingId,
+        purpose: 'direct-ai',
+        anchor: current.anchor
       })
     ).rejects.toThrow(/compiler-authenticated element/);
     await expect(
-      service.requestAIChange({
-        kind: 'authenticated-element',
-        agentId: 'fixture-designer',
-        instruction: 'Reject a cross-project target.',
-        target: { ...authenticatedTarget, projectId: 'another-project' }
+      service.mintArtifactSelectionReceipt({
+        format: 'selene-artifact-selection-receipt-request/v1',
+        projectId: 'another-project',
+        revisionId: current.revisionId,
+        previewBindingId: current.bindingId,
+        purpose: 'direct-ai',
+        anchor: current.anchor
       })
     ).rejects.toThrow(/compiler-authenticated element/);
 
     await expect(
       service.addReviewThread({
         body: 'Save a compiler-bound review.',
-        target: authenticatedTarget
+        selectionReceipt: await reviewSelectionReceiptFor(service)
       })
     ).resolves.toMatchObject({
       reviewThreads: [
         {
-          anchor: { nodeRef: authenticatedTarget.nodeRef },
+          anchor: { nodeRef: current.nodeRef },
           aiTargetEligibility: 'compiler-bound'
         }
       ]
@@ -3912,9 +3962,9 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     if (stored === undefined) throw new Error('Compiler-bound review was not persisted.');
     expect(parseSnapshot(stored.collaborationSnapshot).reviewThreads.at(-1)).toMatchObject({
       compilerTargetProvenance: {
-        nodeId: authenticatedTarget.nodeRef,
-        revisionId: authenticatedTarget.revisionId,
-        bindingId: authenticatedTarget.bindingId
+        nodeId: current.nodeRef,
+        revisionId: current.revisionId,
+        bindingId: current.bindingId
       }
     });
   });
@@ -3925,7 +3975,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     writer.registerAgent(new DeterministicDesignerFixtureAdapter());
     const created = await writer.addReviewThread({
       body: 'Initially compiler-bound.',
-      target: authenticatedTargetFor(writer)
+      selectionReceipt: await reviewSelectionReceiptFor(writer)
     });
     const thread = created.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Authenticated review thread was not created.');
@@ -3961,21 +4011,15 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     const { workspace, binding } = matchedBindingWorkspace(writer.snapshot());
     await writer.openProjectWorkspace(workspace);
     hostBindingState(writer).reactBinding = binding;
-    const writerSnapshot = writer.snapshot();
     const nodeRef = workspace.nodes[0]?.nodeId;
-    const bindingId = writerSnapshot.editablePrototype.previewTicket?.bindingId;
-    if (nodeRef === undefined || bindingId === undefined)
+    if (nodeRef === undefined)
       throw new Error('Compiler-backed fixture target was not created.');
     const created = await writer.addReviewThread({
       body: 'Persist compiler-bound provenance only.',
-      target: {
-        format: 'selene-authenticated-artifact-element-target/v1',
-        projectId: workspace.projectId,
-        nodeRef,
-        revisionId: workspace.revision.id,
-        bindingId,
-        anchor: { ...target, nodeRef }
-      }
+      selectionReceipt: await currentPreviewReviewSelectionReceiptFor(writer, {
+        ...target,
+        nodeRef
+      })
     });
     const thread = created.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Authenticated review thread was not created.');
@@ -4021,7 +4065,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         reviewThreadId: thread.id
       })
     ).resolves.toMatchObject({ aiChangeRequests: [{ status: 'reviewing' }] });
-    expect(receivedTarget).toMatchObject({ nodeRef, bindingId });
+    expect(receivedTarget).toMatchObject({ nodeRef });
   });
 
   it('takes a spatial AI request through adapter, source validation, revision, and handoff', async () => {
@@ -4031,7 +4075,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     service.registerAgent(new DeterministicDesignerFixtureAdapter());
     const reviewed = await service.addReviewThread({
       body: 'Preserve this spatial review context for developers.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const reviewThread = reviewed.reviewThreads[0];
     if (reviewThread === undefined) throw new Error('Fixture review thread was not created.');
@@ -4043,7 +4087,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Make the target action descriptive.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(staged.source.revision.id).toBe('desktop-designer-r1');
     expect(staged.aiChangeRequests).toMatchObject([{ status: 'reviewing' }]);
@@ -4107,7 +4151,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Stage this change for rejection.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -4133,7 +4177,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Keep this compiled proposal across reopen.',
-      target: authenticatedTargetFor(writer)
+      selectionReceipt: await authenticatedSelectionReceiptFor(writer)
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -4173,7 +4217,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Apply then compensate this source revision.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -4192,7 +4236,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(originalResult).toBeDefined();
     const reviewed = await service.addReviewThread({
       body: 'Keep this review thread.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     const thread = reviewed.reviewThreads.at(-1);
     if (thread === undefined) throw new Error('Review thread was not recorded.');
@@ -4229,7 +4273,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'First applied request.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const firstRequest = first.aiChangeRequests.at(-1);
     if (firstRequest === undefined) throw new Error('First request was not recorded.');
@@ -4237,7 +4281,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Second applied request.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const before = service.snapshot();
     await expect(
@@ -4269,7 +4313,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Rollback the undo on persistence failure.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     const request = applied.aiChangeRequests.at(-1);
     if (request === undefined) throw new Error('Applied request was not recorded.');
@@ -4295,7 +4339,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
 
     const afterComment = await service.addReviewThread({
       body: 'Discussion only: confirm the accessible name.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await reviewSelectionReceiptFor(service)
     });
     expect(afterComment.baseline).toMatchObject({
       readiness: 'ready-for-review',
@@ -4322,7 +4366,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       kind: 'authenticated-element',
       agentId: 'fixture-designer',
       instruction: 'Update the primary action after handoff.',
-      target: authenticatedTargetFor(service)
+      selectionReceipt: await authenticatedSelectionReceiptFor(service)
     });
     expect(staged.baseline).toMatchObject({
       readiness: 'ready-for-handoff',
@@ -4363,7 +4407,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
           kind: 'authenticated-element',
           agentId: 'fixture-designer',
           instruction,
-          target: authenticatedTargetFor(service)
+          selectionReceipt: await authenticatedSelectionReceiptFor(service)
         });
         return { instruction, next };
       })
@@ -4424,7 +4468,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         kind: 'authenticated-element',
         agentId: 'offline-agent',
         instruction: 'Change this.',
-        target: authenticatedTargetFor(service)
+        selectionReceipt: await authenticatedSelectionReceiptFor(service)
       })
     ).rejects.toThrow('adapter unavailable');
     expect(service.snapshot().aiChangeRequests).toMatchObject([
@@ -4457,7 +4501,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         kind: 'authenticated-element',
         agentId: 'diagnostic-agent',
         instruction: 'private design prompt',
-        target: authenticatedTargetFor(service)
+        selectionReceipt: await authenticatedSelectionReceiptFor(service)
       })
     ).rejects.toThrow('prompt=private');
     expect(captured).toEqual([
@@ -4473,7 +4517,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         kind: 'authenticated-element',
         agentId: 'configured-failure',
         instruction: 'Fail predictably.',
-        target: authenticatedTargetFor(failed)
+        selectionReceipt: await authenticatedSelectionReceiptFor(failed)
       })
     ).rejects.toThrow('Configured fixture failed');
     expect(failed.snapshot().aiChangeRequests).toMatchObject([{ status: 'failed' }]);
@@ -4489,7 +4533,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         kind: 'authenticated-element',
         agentId: 'configured-cancel',
         instruction: 'Cancel predictably.',
-        target: authenticatedTargetFor(cancelled)
+        selectionReceipt: await authenticatedSelectionReceiptFor(cancelled)
       })
     ).rejects.toThrow(/cancel/i);
     expect(cancelled.snapshot().aiChangeRequests).toMatchObject([{ status: 'cancelled' }]);

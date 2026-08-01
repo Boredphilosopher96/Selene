@@ -12,7 +12,8 @@ import {
   validateAIProposalDecision,
   validateAIChangeRequest,
   validateAIChangeUndo,
-  validateAuthenticatedArtifactElementTarget,
+  validateArtifactSelectionReceipt,
+  validateArtifactSelectionReceiptRequest,
   validateManualDesignUndo,
   validatePreviewBuildTicket,
   validatePrototypeScenarioStart,
@@ -51,14 +52,18 @@ describe('validateSpatialTarget', () => {
   });
 });
 
-describe('authenticated artifact element targets', () => {
-  const target = {
-    format: 'selene-authenticated-artifact-element-target/v1',
+describe('host-minted artifact selection receipts', () => {
+  const selection = {
+    format: 'selene-artifact-selection-receipt-request/v1',
     projectId: 'desktop-designer',
-    nodeRef: 'designer.action',
     revisionId: 'desktop-designer-r1',
-    bindingId: 'binding-1',
+    previewBindingId: 'a'.repeat(64),
+    purpose: 'direct-ai' as const,
     anchor: { x: 0.25, y: 0.5, viewport, nodeRef: 'designer.action' }
+  } as const;
+  const receipt = {
+    format: 'selene-artifact-selection-receipt/v1',
+    receiptId: 'b'.repeat(32)
   } as const;
 
   it('accepts only explicit general, review-thread, and authenticated-element requests', () => {
@@ -82,42 +87,40 @@ describe('authenticated artifact element targets', () => {
         kind: 'authenticated-element',
         agentId: 'fixture-designer',
         instruction: 'Revise the selected control.',
-        target
+        selectionReceipt: receipt
       })
-    ).toMatchObject({ kind: 'authenticated-element', target });
-    expect(validateAuthenticatedArtifactElementTarget(target)).toEqual(target);
-    expect(validateReviewThread({ body: 'Review this action.', target })).toEqual({
+    ).toMatchObject({ kind: 'authenticated-element', selectionReceipt: receipt });
+    expect(validateArtifactSelectionReceiptRequest(selection)).toEqual(selection);
+    expect(validateArtifactSelectionReceipt(receipt)).toEqual(receipt);
+    expect(validateReviewThread({ body: 'Review this action.', selectionReceipt: receipt })).toEqual({
       body: 'Review this action.',
-      target
+      selectionReceipt: receipt
     });
   });
 
-  it('rejects legacy geometry, ambiguous selectors, unknown fields, and hostile nested records', () => {
-    expect(() => validateReviewThread({ body: 'Legacy geometry.', anchor: target.anchor })).toThrow(
+  it('rejects legacy geometry, public targets, wrong-purpose fields, and hostile nested records', () => {
+    expect(() => validateReviewThread({ body: 'Legacy geometry.', anchor: selection.anchor })).toThrow(
       /fields are invalid/
-    );
-    expect(() => validateAuthenticatedArtifactElementTarget({ ...target, extra: true })).toThrow(
-      /fields/
     );
     expect(() =>
       validateAIChangeRequest({
         kind: 'authenticated-element',
         agentId: 'fixture-designer',
         instruction: 'Cannot ambiguously escalate.',
-        target,
+        selectionReceipt: receipt,
         reviewThreadId: 'review-1'
       })
     ).toThrow(/requires exactly one element target/);
     expect(() =>
-      validateAuthenticatedArtifactElementTarget({
-        ...target,
-        anchor: { ...target.anchor, viewport: { ...target.anchor.viewport, extra: true } }
+      validateArtifactSelectionReceiptRequest({
+        ...selection,
+        anchor: { ...selection.anchor, viewport: { ...selection.anchor.viewport, extra: true } }
       })
     ).toThrow(/anchor viewport fields are invalid/);
     expect(() => {
-      const hostile = { ...target } as Record<PropertyKey, unknown>;
+      const hostile = { ...receipt } as Record<PropertyKey, unknown>;
       hostile[Symbol('unexpected')] = true;
-      return validateAuthenticatedArtifactElementTarget(hostile);
+      return validateArtifactSelectionReceipt(hostile);
     }).toThrow(/fields/);
   });
 });

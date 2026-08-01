@@ -1277,6 +1277,7 @@ export function App() {
           cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
           undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
+          mintArtifactSelectionReceipt: window.selene.designer.mintArtifactSelectionReceipt,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,
           replyToReviewThread: window.selene.designer.replyToReviewThread,

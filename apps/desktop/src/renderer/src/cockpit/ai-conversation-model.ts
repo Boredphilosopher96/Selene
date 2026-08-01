@@ -1,7 +1,8 @@
 import type {
   AIChangeRequest,
   AIChangeRequestInput,
-  AuthenticatedArtifactElementTarget,
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   DesignerProgress,
   SpatialTargetInput
 } from '../../../shared/designer-api';
@@ -56,57 +57,18 @@ export function isCurrentProjectOwner(
 /** Historical targets are display-only; retries require a newly minted current target. */
 export function requestInput(
   request: AIChangeRequest,
-  currentTarget?: AuthenticatedArtifactElementTarget
+  currentSelectionReceipt?: ArtifactSelectionReceipt
 ): AIChangeRequestInput | undefined {
   if (request.target !== undefined) {
-    if (currentTarget === undefined) return undefined;
+    if (currentSelectionReceipt === undefined) return undefined;
     return {
       kind: 'authenticated-element',
       agentId: request.agentId,
       instruction: request.instruction,
-      target: currentTarget
+      selectionReceipt: currentSelectionReceipt
     };
   }
   return { kind: 'general', agentId: request.agentId, instruction: request.instruction };
-}
-
-/** A renderer target is useful only when it carries the current host-issued preview binding. */
-export function mintAuthenticatedAiTarget({
-  anchor,
-  projectId,
-  revisionId,
-  bindingId
-}: {
-  readonly anchor: SpatialTargetInput;
-  readonly projectId: string;
-  readonly revisionId: string;
-  readonly bindingId: string | undefined;
-}):
-  | { readonly kind: 'available'; readonly target: AuthenticatedArtifactElementTarget }
-  | { readonly kind: 'unavailable'; readonly message: string } {
-  if (bindingId === undefined)
-    return {
-      kind: 'unavailable',
-      message:
-        'The current preview build is unavailable. Refresh the preview, then reselect the element.'
-    };
-  if (anchor.nodeRef === undefined)
-    return {
-      kind: 'unavailable',
-      message:
-        'This selection is not compiler-mapped. Reselect a current rendered element before asking AI.'
-    };
-  return {
-    kind: 'available',
-    target: {
-      format: 'selene-authenticated-artifact-element-target/v1',
-      projectId,
-      nodeRef: anchor.nodeRef,
-      revisionId,
-      bindingId,
-      anchor
-    }
-  };
 }
 
 export function requestOutcome(request: AIChangeRequest): string {
@@ -136,28 +98,30 @@ export function requestOutcome(request: AIChangeRequest): string {
 }
 
 export function targetSummary(
-  _target: Pick<SpatialTargetInput, 'x' | 'y' | 'width' | 'height'>
+  target?: Pick<SpatialTargetInput, 'nodeRef'>
 ): string {
-  return 'Current compiler-authenticated React element';
+  return target?.nodeRef === undefined
+    ? 'Selected compiler-authenticated React element'
+    : `Selected React element: ${target.nodeRef}`;
 }
 
 export function composerDisabledReason({
   agentAvailable,
   requestActive,
   instruction,
-  target
+  selection
 }: {
   readonly agentAvailable: boolean;
   readonly requestActive: boolean;
   readonly instruction: string;
-  readonly target: AuthenticatedArtifactElementTarget | undefined;
+  readonly selection: ArtifactSelectionReceiptRequest | undefined;
 }): string | undefined {
   if (requestActive)
     return 'Wait for the current AI operation to finish before starting another change.';
   if (!agentAvailable)
     return 'No configured agent is available. Complete agent setup before sending a change.';
   if (!instruction.trim()) return 'Describe the change before sending it.';
-  if (target === undefined)
+  if (selection === undefined)
     return 'Select a current compiler-authenticated rendered React element before sending it.';
   return undefined;
 }

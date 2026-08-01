@@ -16,7 +16,8 @@ import {
 import type {
   AIChangeRequest,
   AIChangeRequestInput,
-  AuthenticatedArtifactElementTarget,
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
@@ -39,7 +40,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel';
-import { isCurrentProjectOwner, mintAuthenticatedAiTarget } from './ai-conversation-model';
+import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
@@ -139,6 +140,14 @@ export interface DesktopCockpitActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+  mintArtifactSelectionReceipt(request: {
+    readonly format: 'selene-artifact-selection-receipt-request/v1';
+    readonly projectId: string;
+    readonly revisionId: string;
+    readonly previewBindingId: string;
+    readonly purpose: 'direct-ai' | 'review-thread';
+    readonly anchor: SpatialTargetInput;
+  }): Promise<ArtifactSelectionReceipt>;
   addReviewThread(input: ReviewThreadInput): Promise<DesignerSnapshot>;
   resolveReviewThread(input: ReviewThreadResolutionInput): Promise<DesignerSnapshot>;
   replyToReviewThread(input: ReviewThreadReplyInput): Promise<DesignerSnapshot>;
@@ -337,7 +346,7 @@ export function DesktopCockpit({
         ? runtimeNode.parentId
         : snapshot.editablePrototype.graph.initialNodeId;
   const [annotation, setAnnotation] = useState('Preserve keyboard focus after this change.');
-  const [aiTarget, setAiTarget] = useState<AuthenticatedArtifactElementTarget>();
+  const [aiTarget, setAiTarget] = useState<ArtifactSelectionReceiptRequest>();
   const [aiTargetProjectId, setAiTargetProjectId] = useState<string>();
   const [selectedArtifactPinId, setSelectedArtifactPinId] = useState<string | undefined>(() =>
     initialSelectedThreadId !== undefined &&
@@ -439,20 +448,30 @@ export function DesktopCockpit({
   const currentAiTarget = isCurrentProjectOwner(aiTargetProjectId, snapshot.source.projectId)
     ? aiTarget
     : undefined;
-  const selectAuthenticatedAiTarget = (anchor: SpatialTargetInput): boolean => {
-    const minted = mintAuthenticatedAiTarget({
-      anchor,
-      projectId: snapshot.source.projectId,
-      revisionId: snapshot.source.revision.id,
-      bindingId: snapshot.editablePrototype.previewTicket?.bindingId
-    });
-    if (minted.kind === 'unavailable') {
+  const describeCurrentSelection = (
+    anchor: SpatialTargetInput,
+    purpose: 'direct-ai' | 'review-thread'
+  ): ArtifactSelectionReceiptRequest | undefined => {
+    const previewBindingId = snapshot.editablePrototype.previewTicket?.bindingId;
+    if (previewBindingId === undefined) {
       setAiTarget(undefined);
       setAiTargetProjectId(undefined);
-      setAiStatus(minted.message);
-      return false;
+      setAiStatus('The current preview build is unavailable. Refresh the preview, then reselect.');
+      return undefined;
     }
-    setAiTarget(minted.target);
+    return {
+      format: 'selene-artifact-selection-receipt-request/v1',
+      projectId: snapshot.source.projectId,
+      revisionId: snapshot.source.revision.id,
+      previewBindingId,
+      purpose,
+      anchor
+    };
+  };
+  const selectAuthenticatedAiTarget = (anchor: SpatialTargetInput): boolean => {
+    const selection = describeCurrentSelection(anchor, 'direct-ai');
+    if (selection === undefined) return false;
+    setAiTarget(selection);
     setAiTargetProjectId(snapshot.source.projectId);
     return true;
   };
@@ -713,14 +732,11 @@ export function DesktopCockpit({
       throw new Error(
         'The selected element is from an older revision. Select it again before commenting.'
       );
-    const minted = mintAuthenticatedAiTarget({
-      anchor,
-      projectId: snapshot.source.projectId,
-      revisionId: snapshot.source.revision.id,
-      bindingId: snapshot.editablePrototype.previewTicket?.bindingId
-    });
-    if (minted.kind === 'unavailable') throw new Error(minted.message);
-    const next = await actions.addReviewThread({ body, target: minted.target });
+    const selection = describeCurrentSelection(anchor, 'review-thread');
+    if (selection === undefined)
+      throw new Error('Select a current compiler-authenticated element before starting a thread.');
+    const selectionReceipt = await actions.mintArtifactSelectionReceipt(selection);
+    const next = await actions.addReviewThread({ body, selectionReceipt });
     const created = next.reviewThreads.find(
       (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
     );
@@ -1165,8 +1181,8 @@ export function DesktopCockpit({
     _invoking: HTMLButtonElement
   ) => {
     if (aiBusyRef.current) return;
-    if (!selectAuthenticatedAiTarget(target)) return;
-    setAiStatus('Inspect context is ready for the next AI edit request.');
+    if (selectAuthenticatedAiTarget(target))
+      setAiStatus('Inspect context is ready for the next AI edit request.');
   };
   const inspectorTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     const current = inspectorTabs.indexOf(inspectorTab);
@@ -1760,6 +1776,7 @@ export function DesktopCockpit({
               snapshot: actions.snapshot,
               selectAgent: actions.selectAgent,
               requestAIChange: actions.requestAIChange,
+              mintArtifactSelectionReceipt: actions.mintArtifactSelectionReceipt,
               acceptAIProposal: actions.acceptAIProposal,
               rejectAIProposal: actions.rejectAIProposal,
               cancelAIChange: actions.cancelAIChange,

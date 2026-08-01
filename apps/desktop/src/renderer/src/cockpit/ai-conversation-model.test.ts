@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type {
   AIChangeRequest,
-  AuthenticatedArtifactElementTarget
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest
 } from '../../../shared/designer-api';
 import {
   canApplyConversationOperation,
@@ -38,12 +39,12 @@ const request: AIChangeRequest = {
   }
 };
 
-const currentTarget: AuthenticatedArtifactElementTarget = {
-  format: 'selene-authenticated-artifact-element-target/v1',
+const currentSelection: ArtifactSelectionReceiptRequest = {
+  format: 'selene-artifact-selection-receipt-request/v1',
   projectId: 'desktop-designer',
-  nodeRef: 'primary-action',
   revisionId: 'desktop-r1',
-  bindingId: 'binding-1',
+  previewBindingId: 'a'.repeat(64),
+  purpose: 'direct-ai',
   anchor: {
     x: 0.25,
     y: 0.5,
@@ -53,15 +54,19 @@ const currentTarget: AuthenticatedArtifactElementTarget = {
     nodeRef: 'primary-action'
   }
 };
+const selectionReceipt: ArtifactSelectionReceipt = {
+  format: 'selene-artifact-selection-receipt/v1',
+  receiptId: 'a'.repeat(32)
+};
 
 describe('AI conversation request model', () => {
   it('requires a current authenticated target before retrying historical display data', () => {
     expect(requestInput(request)).toBeUndefined();
-    expect(requestInput(request, currentTarget)).toEqual({
+    expect(requestInput(request, selectionReceipt)).toEqual({
       kind: 'authenticated-element',
       agentId: 'fixture-agent',
       instruction: 'Clarify the primary action.',
-      target: currentTarget
+      selectionReceipt
     });
   });
 
@@ -78,7 +83,7 @@ describe('AI conversation request model', () => {
         agentAvailable: true,
         requestActive: false,
         instruction: request.instruction,
-        target: undefined
+        selection: undefined
       })
     ).toBe('Select a current compiler-authenticated rendered React element before sending it.');
     expect(
@@ -86,7 +91,7 @@ describe('AI conversation request model', () => {
         agentAvailable: false,
         requestActive: false,
         instruction: request.instruction,
-        target: currentTarget
+        selection: currentSelection
       })
     ).toBe('No configured agent is available. Complete agent setup before sending a change.');
   });

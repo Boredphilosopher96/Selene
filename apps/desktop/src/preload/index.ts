@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 import type {
   AIChangeRequestInput,
+  ArtifactSelectionReceipt,
+  ArtifactSelectionReceiptRequest,
   AIChangeUndoInput,
   AIProposalDecisionInput,
   ManualDesignUndoInput,
@@ -232,6 +234,11 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:open-publish-receipt', publishId) as Promise<void>,
     githubPublishSetup: () =>
       ipcRenderer.invoke('selene:designer:github-publish-setup') as Promise<GitHubPublishSetup>,
+    mintArtifactSelectionReceipt: (request: ArtifactSelectionReceiptRequest) =>
+      ipcRenderer.invoke(
+        'selene:designer:mint-artifact-selection-receipt',
+        request
+      ) as Promise<ArtifactSelectionReceipt>,
     addReviewThread: (thread: ReviewThreadInput) =>
       ipcRenderer.invoke('selene:designer:add-review-thread', thread) as Promise<DesignerSnapshot>,
     resolveReviewThread: (thread: ReviewThreadResolutionInput) =>

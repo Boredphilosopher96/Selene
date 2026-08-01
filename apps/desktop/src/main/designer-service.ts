@@ -95,6 +95,8 @@ import {
   type AIChangeRequest,
   type AIChangeHistoryTarget,
   type AuthenticatedArtifactElementTarget,
+  type ArtifactSelectionReceipt,
+  type ArtifactSelectionReceiptRequest,
   type ArtifactPin,
   type ReviewThread,
   type PreviewBuildTicket,
@@ -103,6 +105,8 @@ import {
   validateDeveloperAnnotation,
   validateAIChangeRequest,
   validateAIChangeUndo,
+  validateArtifactSelectionReceipt,
+  validateArtifactSelectionReceiptRequest,
   validateManualDesignUndo,
   validateAIProposalDecision,
   validateDesignerIdentifier,
@@ -1641,6 +1645,15 @@ export class DesktopDesignerApplicationService {
   private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
   /** Sole host-owned agent candidate awaiting an explicit designer decision. */
   private pendingAIProposal: LocalPendingAIProposal | undefined;
+  /** Short-lived, one-purpose selection receipts; the bound compiler target never crosses IPC. */
+  private readonly artifactSelectionReceipts = new Map<
+    string,
+    {
+      readonly purpose: ArtifactSelectionReceiptRequest['purpose'];
+      readonly target: AuthenticatedArtifactElementTarget;
+      readonly expiresAt: number;
+    }
+  >();
   /** Ephemeral host grants. They are deliberately neither durable state nor renderer snapshot data. */
   private readonly manualTextEditCapabilities = new Map<
     string,
@@ -1755,6 +1768,8 @@ export class DesktopDesignerApplicationService {
   private static readonly maximumPublishOperations = 32;
   private static readonly maximumPublishProgress = 64;
   private static readonly maximumPublishConsentLifetimeMs = 10 * 60_000;
+  private static readonly maximumArtifactSelectionReceipts = 32;
+  private static readonly artifactSelectionReceiptLifetimeMs = 30_000;
   /** In-memory, versioned staging provenance for the currently open lifecycle workspace. */
   private designInputProvenance: {
     readonly format: 'selene-desktop-current-workspace-design-inputs/v1';
@@ -5734,6 +5749,71 @@ export class DesktopDesignerApplicationService {
       );
   }
 
+  /** Mints a narrow renderer receipt after matching descriptive geometry to current host evidence. */
+  public mintArtifactSelectionReceipt(value: unknown): Promise<ArtifactSelectionReceipt> {
+    return this.enqueueGraphOperation(async () => {
+      const selection = validateArtifactSelectionReceiptRequest(value);
+      const nodeRef = selection.anchor.nodeRef;
+      if (nodeRef === undefined) {
+        throw new DesignerApplicationError(
+          'Select a compiler-mapped rendered element before requesting AI or starting a thread.'
+        );
+      }
+      if (selection.previewBindingId !== this.previewBuildTicket().bindingId)
+        throw new DesignerApplicationError(
+          'The selected element is from an older preview build. Reselect it before continuing.'
+        );
+      const target: AuthenticatedArtifactElementTarget = {
+        format: 'selene-authenticated-artifact-element-target/v1',
+        projectId: selection.projectId,
+        nodeRef,
+        revisionId: selection.revisionId,
+        bindingId: selection.previewBindingId,
+        anchor: selection.anchor
+      };
+      this.requireCurrentAuthenticatedElementTarget(target);
+      const now = Date.now();
+      for (const [receiptId, receipt] of this.artifactSelectionReceipts) {
+        if (receipt.expiresAt <= now) this.artifactSelectionReceipts.delete(receiptId);
+      }
+      if (
+        this.artifactSelectionReceipts.size >=
+        DesktopDesignerApplicationService.maximumArtifactSelectionReceipts
+      )
+        throw new DesignerApplicationError('Too many selection receipts are active. Select the element again.');
+      const receiptId = createHash('sha256').update(randomUUID()).digest('hex').slice(0, 32);
+      this.artifactSelectionReceipts.set(receiptId, {
+        purpose: selection.purpose,
+        target,
+        expiresAt: now + DesktopDesignerApplicationService.artifactSelectionReceiptLifetimeMs
+      });
+      return Object.freeze({
+        format: 'selene-artifact-selection-receipt/v1' as const,
+        receiptId
+      });
+    });
+  }
+
+  /** Resolves exactly one current host-minted receipt and always consumes it before proceeding. */
+  private consumeArtifactSelectionReceipt(
+    value: unknown,
+    purpose: ArtifactSelectionReceiptRequest['purpose']
+  ): AuthenticatedArtifactElementTarget {
+    const receipt = validateArtifactSelectionReceipt(value);
+    const issued = this.artifactSelectionReceipts.get(receipt.receiptId);
+    this.artifactSelectionReceipts.delete(receipt.receiptId);
+    if (
+      issued === undefined ||
+      issued.purpose !== purpose ||
+      issued.expiresAt <= Date.now()
+    )
+      throw new DesignerApplicationError(
+        'This selection receipt is unavailable. Reselect the current rendered element and try again.'
+      );
+    this.requireCurrentAuthenticatedElementTarget(issued.target);
+    return issued.target;
+  }
+
   /** Reconstruct a target only from persisted provenance and a fresh current host binding. */
   private currentTargetForReviewThread(reviewThreadId: string): AuthenticatedArtifactElementTarget {
     const thread = this.collaboration.reviewThreads.find((item) => item.id === reviewThreadId);
@@ -6637,7 +6717,10 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(() =>
       this.mutateDurably(async () => {
         const discussion = validateReviewThread(value);
-        this.requireCurrentAuthenticatedElementTarget(discussion.target);
+        const compilerTarget = this.consumeArtifactSelectionReceipt(
+          discussion.selectionReceipt,
+          'review-thread'
+        );
         const scenario = enterpriseScenarioFixtures.find(
           (item) => item.id === this.selectedScenarioId
         );
@@ -6653,7 +6736,7 @@ export class DesktopDesignerApplicationService {
           createdAt: new Date().toISOString(),
           aiTargetEligibility: 'compiler-bound',
           anchor: {
-            ...discussion.target.anchor,
+            ...compilerTarget.anchor,
             artifactId: this.source.projectId,
             screenId: artifact.screenId,
             scenarioId: artifact.scenarioId,
@@ -6662,7 +6745,7 @@ export class DesktopDesignerApplicationService {
           }
         });
         this.activity.unshift('Added a compiler-bound discussion thread.');
-        this.appendCanonicalReview(this.reviewThreads.at(-1)!, discussion.target);
+        this.appendCanonicalReview(this.reviewThreads.at(-1)!, compilerTarget);
         await this.persistProjectState();
         return this.snapshot();
       })
@@ -6880,12 +6963,10 @@ export class DesktopDesignerApplicationService {
         const sourceRevisionId = this.source.revision.id;
         const target =
           input.kind === 'authenticated-element'
-            ? input.target
+            ? this.consumeArtifactSelectionReceipt(input.selectionReceipt, 'direct-ai')
             : input.kind === 'review-thread'
               ? this.currentTargetForReviewThread(input.reviewThreadId)
               : undefined;
-        if (input.kind === 'authenticated-element')
-          this.requireCurrentAuthenticatedElementTarget(input.target);
         const historyAnchor =
           target === undefined
             ? undefined

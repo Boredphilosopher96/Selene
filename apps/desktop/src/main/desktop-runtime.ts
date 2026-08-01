@@ -947,6 +947,9 @@ function createWindow(): void {
   designerHandler('selene:designer:add-review-thread', (value) =>
     desktopDesigner.addReviewThread(value)
   );
+  designerHandler('selene:designer:mint-artifact-selection-receipt', (value) =>
+    desktopDesigner.mintArtifactSelectionReceipt(value)
+  );
   designerHandler('selene:designer:resolve-review-thread', (value) =>
     desktopDesigner.resolveReviewThread(value)
   );

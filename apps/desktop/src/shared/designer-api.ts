@@ -785,7 +785,7 @@ export type AIChangeRequestInput =
     })
   | (AIChangeRequestBase & {
       readonly kind: 'authenticated-element';
-      readonly target: AuthenticatedArtifactElementTarget;
+      readonly selectionReceipt: ArtifactSelectionReceipt;
       readonly reviewThreadId?: never;
     })
   | (AIChangeRequestBase & {
@@ -1194,7 +1194,24 @@ export interface SpatialTargetInput {
   readonly nodeRef?: string;
 }
 
-/** A target is trusted only when the host can match it to the current compiler binding. */
+/** The renderer describes its current preview selection; it never supplies binding authority. */
+export interface ArtifactSelectionReceiptRequest {
+  readonly format: 'selene-artifact-selection-receipt-request/v1';
+  readonly projectId: string;
+  readonly revisionId: string;
+  /** Preview identity observed with the rendered selection; it is a fence, never authority. */
+  readonly previewBindingId: string;
+  readonly purpose: 'direct-ai' | 'review-thread';
+  readonly anchor: SpatialTargetInput;
+}
+
+/** Opaque, short-lived host receipt for one current compiler-authenticated selection. */
+export interface ArtifactSelectionReceipt {
+  readonly format: 'selene-artifact-selection-receipt/v1';
+  readonly receiptId: string;
+}
+
+/** Host-only target retained behind an opaque selection receipt. */
 export interface AuthenticatedArtifactElementTarget {
   readonly format: 'selene-authenticated-artifact-element-target/v1';
   readonly anchor: SpatialTargetInput;
@@ -1216,7 +1233,7 @@ export interface AIChangeHistoryTarget extends SpatialTargetInput {
 
 export interface ReviewThreadInput {
   readonly body: string;
-  readonly target: AuthenticatedArtifactElementTarget;
+  readonly selectionReceipt: ArtifactSelectionReceipt;
 }
 export interface ReviewThreadResolutionInput {
   readonly id: string;
@@ -1466,25 +1483,25 @@ export function validateAIChangeRequest(value: unknown): AIChangeRequestInput {
     value,
     'AI change request',
     ['agentId', 'instruction', 'kind'],
-    ['target', 'reviewThreadId']
+    ['reviewThreadId', 'selectionReceipt']
   );
   const agentId = validateDesignerIdentifier(input.agentId, 'agentId');
   const request = { agentId, instruction: instruction(input.instruction, 'instruction') };
   switch (input.kind) {
     case 'general':
-      if (input.target !== undefined || input.reviewThreadId !== undefined)
+      if (input.selectionReceipt !== undefined || input.reviewThreadId !== undefined)
         throw new Error('General AI change request must not include a target selector');
       return { ...request, kind: 'general' };
     case 'authenticated-element':
-      if (input.target === undefined || input.reviewThreadId !== undefined)
+      if (input.selectionReceipt === undefined || input.reviewThreadId !== undefined)
         throw new Error('Authenticated AI change request requires exactly one element target');
       return {
         ...request,
         kind: 'authenticated-element',
-        target: validateAuthenticatedArtifactElementTarget(input.target)
+        selectionReceipt: validateArtifactSelectionReceipt(input.selectionReceipt)
       };
     case 'review-thread':
-      if (input.target !== undefined || input.reviewThreadId === undefined)
+      if (input.selectionReceipt !== undefined || input.reviewThreadId === undefined)
         throw new Error('Review-thread AI change request requires exactly one review thread');
       return {
         ...request,
@@ -1690,6 +1707,48 @@ export function validateAuthenticatedArtifactElementTarget(
   });
 }
 
+export function validateArtifactSelectionReceiptRequest(
+  value: unknown
+): ArtifactSelectionReceiptRequest {
+  const input = exactInputRecord(
+    value,
+    'artifact selection receipt request',
+    ['anchor', 'format', 'previewBindingId', 'projectId', 'purpose', 'revisionId']
+  );
+  if (input.format !== 'selene-artifact-selection-receipt-request/v1')
+    throw new Error('artifact selection receipt request format is invalid');
+  if (input.purpose !== 'direct-ai' && input.purpose !== 'review-thread')
+    throw new Error('artifact selection receipt request purpose is invalid');
+  const anchor = validateAuthenticatedSpatialTarget(input.anchor);
+  if (anchor.nodeRef === undefined)
+    throw new Error('artifact selection receipt request requires a compiler-mapped node');
+  return Object.freeze({
+    format: 'selene-artifact-selection-receipt-request/v1',
+    projectId: validateDesignerIdentifier(input.projectId, 'selection projectId'),
+    revisionId: validateDesignerIdentifier(input.revisionId, 'selection revisionId'),
+    previewBindingId:
+      typeof input.previewBindingId === 'string' && /^[a-f0-9]{64}$/.test(input.previewBindingId)
+        ? input.previewBindingId
+        : (() => {
+            throw new Error('selection preview binding is invalid');
+          })(),
+    purpose: input.purpose,
+    anchor
+  });
+}
+
+export function validateArtifactSelectionReceipt(value: unknown): ArtifactSelectionReceipt {
+  const input = exactInputRecord(value, 'artifact selection receipt', ['format', 'receiptId']);
+  if (input.format !== 'selene-artifact-selection-receipt/v1')
+    throw new Error('artifact selection receipt format is invalid');
+  if (typeof input.receiptId !== 'string' || !/^[a-f0-9]{32}$/.test(input.receiptId))
+    throw new Error('artifact selection receipt ID is invalid');
+  return Object.freeze({
+    format: 'selene-artifact-selection-receipt/v1',
+    receiptId: input.receiptId
+  });
+}
+
 function validateAuthenticatedSpatialTarget(value: unknown): SpatialTargetInput {
   const input = exactInputRecord(
     value,
@@ -1706,10 +1765,10 @@ function validateAuthenticatedSpatialTarget(value: unknown): SpatialTargetInput 
 }
 
 export function validateReviewThread(value: unknown): ReviewThreadInput {
-  const input = exactInputRecord(value, 'review thread', ['body', 'target']);
+  const input = exactInputRecord(value, 'review thread', ['body', 'selectionReceipt']);
   return {
     body: body(input.body, 'review thread'),
-    target: validateAuthenticatedArtifactElementTarget(input.target)
+    selectionReceipt: validateArtifactSelectionReceipt(input.selectionReceipt)
   };
 }
 export function validateReviewThreadResolution(value: unknown): ReviewThreadResolutionInput {
