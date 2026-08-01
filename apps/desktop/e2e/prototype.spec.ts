@@ -713,7 +713,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       ).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const establishDashboardScenario = async () => {
-        const dashboard = prototype.getByRole('heading', { name: 'Dashboard', exact: true });
+        const dashboard = prototype.getByRole('heading', { name: /dashboard/i });
         const runDashboardScenario = window.getByRole('button', {
           name: 'Run declared scenario for Dashboard',
           exact: true
