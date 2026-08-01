@@ -23,24 +23,24 @@ describe('artifactToolbarScreenPosition', () => {
     ).toEqual({ left: 170, placement: 'below', top: 248 });
   });
 
-  it('docks a left-edge selection to the canvas gutter', () => {
+  it('docks a left-edge selection on its disjoint right side', () => {
     expect(
       artifactToolbarScreenPosition(
         { left: 110, top: 200, right: 170, bottom: 240, width: 60, height: 40 },
         toolbar,
         viewport
-      ).left
-    ).toBe(108);
+      )
+    ).toEqual({ left: 178, placement: 'right', top: 180 });
   });
 
-  it('docks a right-edge selection to the canvas gutter', () => {
+  it('docks a right-edge selection on its disjoint left side', () => {
     expect(
       artifactToolbarScreenPosition(
         { left: 820, top: 200, right: 880, bottom: 240, width: 60, height: 40 },
         toolbar,
         viewport
-      ).left
-    ).toBe(332);
+      )
+    ).toEqual({ left: 252, placement: 'left', top: 180 });
   });
 
   it('moves above when the selected artifact has more room there', () => {
