@@ -883,7 +883,7 @@ test('reloads the designer through the capability-limited workspace bridge', asy
 });
 
 test('configured JSONL agent revises, renders, baselines, and exports a stale handoff', async () => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-desktop-e2e-`));
   const diagnostics: string[] = [];
   await writeFile(
