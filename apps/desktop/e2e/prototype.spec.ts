@@ -422,7 +422,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await expect(prototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
       timeout: previewPresentationTimeout
     });
-    await expect(comment).toBeEnabled();
+    await expect(mappedActions).toHaveCount(0);
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -712,7 +712,31 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         )
       ).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
+      const establishDashboardScenario = async () => {
+        await window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          const scenario = snapshot.editablePrototype.graph.scenarios.find(
+            (candidate) => candidate.startNodeId === 'dashboard'
+          );
+          if (!scenario) throw new Error('The saved Dashboard scenario is required for mapping.');
+          await window.selene.designer.startPrototypeScenario({
+            projectId: snapshot.source.projectId,
+            graphRevision: snapshot.editablePrototype.revision,
+            scenarioId: scenario.id
+          });
+        });
+        await expect
+          .poll(async () => {
+            const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
+            return snapshot.editablePrototype.runtime?.activeNodeId;
+          })
+          .toBe('dashboard');
+        await expect(
+          prototype.getByRole('heading', { name: 'Dashboard', exact: true })
+        ).toBeVisible();
+      };
       const selectMappedOrdersAction = async () => {
+        await establishDashboardScenario();
         const action = prototype.getByRole('button', { name: 'Open orders', exact: true });
         const bounds = await action.boundingBox();
         if (!bounds) throw new Error('The mapped orders action must expose physical click bounds.');
