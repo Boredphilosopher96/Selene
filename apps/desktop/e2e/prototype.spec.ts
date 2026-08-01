@@ -264,7 +264,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     await inspect.click();
 
     await expect(
-      window.getByRole('heading', { name: 'Unsupported rendered element', exact: true })
+      window.getByRole('heading', { name: 'Nothing selected', exact: true })
     ).toBeVisible();
 
     const inspectorTabs = window.getByRole('tablist', {

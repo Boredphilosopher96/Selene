@@ -734,21 +734,14 @@ export function App() {
         return;
       }
       if (message.type === 'inspect-element') {
-        // It grants no selection or edit authority. Clear any durable host
-        // selection before retaining this read-only unsupported inspection telemetry.
-        // A preceding clear-selection message already owns the host round trip.
+        // Unsupported DOM never gets a renderer-owned inspection state. Clear
+        // the durable host selection and leave Inspect in its neutral state;
+        // MessagePort and window fallback delivery order cannot change that.
         clearPreviewSelection();
-        setSelectedPreviewTelemetry({
-          provenance: 'authenticated-preview-unmapped',
-          elementId: message.elementId,
-          revisionId: message.revisionId,
-          values: message.telemetry
-        });
         return;
       }
       if (message.type === 'clear-selection') {
-        // This arrives before optional unsupported telemetry. It makes the
-        // host revocation fail closed even if read-only telemetry is rejected.
+        // This is the authoritative fail-closed revocation path.
         clearPreviewSelection();
         return;
       }
