@@ -1049,7 +1049,7 @@ export function ContextualInspector({
                     selectedTarget
                       ? `${normalizedPercent(selectedTarget.x)}, ${normalizedPercent(selectedTarget.y)} · ${
                           selectedTarget.width === undefined
-                            ? 'point'
+                            ? 'Unavailable — element bounds were not reported'
                             : `${normalizedPercent(selectedTarget.width)} × ${normalizedPercent(
                                 selectedTarget.height ?? 0
                               )}`
@@ -1781,7 +1781,7 @@ export function ContextualInspector({
                   label="Selection width"
                   value={
                     selectedTarget.width === undefined
-                      ? 'Point bounds'
+                      ? 'Unavailable — reselect a rendered element'
                       : normalizedPercent(selectedTarget.width)
                   }
                 />
@@ -1789,7 +1789,7 @@ export function ContextualInspector({
                   label="Selection height"
                   value={
                     selectedTarget.height === undefined
-                      ? 'Point bounds'
+                      ? 'Unavailable — reselect a rendered element'
                       : normalizedPercent(selectedTarget.height)
                   }
                 />
