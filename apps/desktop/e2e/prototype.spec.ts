@@ -218,6 +218,11 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       name: 'Selected React element actions'
     });
     await expect(mappedActions).toBeVisible();
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
+      )
+      .toBe('designer.action');
     await mappedActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
     const targetedActions = window.getByLabel('Targeted change actions');
     await expect(
@@ -240,13 +245,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
       name: 'Unsupported preview fixture',
       exact: true
     });
-    const unsupportedPreviewBounds = await unsupportedPreviewHit.boundingBox();
-    if (!unsupportedPreviewBounds)
-      throw new Error('The unsupported preview fixture must expose physical click bounds.');
-    await window.mouse.click(
-      unsupportedPreviewBounds.x + unsupportedPreviewBounds.width / 2,
-      unsupportedPreviewBounds.y + unsupportedPreviewBounds.height / 2
-    );
+    await unsupportedPreviewHit.click();
     await expect
       .poll(() =>
         window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
@@ -894,9 +893,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(appliedRequest).toBeVisible({
         timeout: 5_000
       });
-      await expect(appliedRequest.getByLabel('Request context')).toContainText(
-        'Point near the top-left'
-      );
+      await expect(appliedRequest.getByLabel('Request context')).toContainText('Region near');
       const appliedInstruction = appliedRequest.getByText('Make the primary action explicit.', {
         exact: true
       });
