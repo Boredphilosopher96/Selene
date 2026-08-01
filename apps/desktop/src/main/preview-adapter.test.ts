@@ -163,14 +163,14 @@ describe('isolated preview transport', () => {
     );
     const inlineModule = inlinePreviewModule(document);
     expect(inlineModule).toContain(
-      "addWindowListener('pointerup',event=>{const pending=pendingCanvasSelection;pendingCanvasSelection=undefined;if(!pending||!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;report(pending.type,pending.extra)}"
+      "if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}"
     );
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
     );
-    // Canvas-mode selection is published exactly once by the pending
-    // pointerup owner. The document click listener must not emit a second
-    // select-node report for the same physical gesture.
+    // Canvas-mode selection is published once from trusted pointerdown. The
+    // document click listener must not emit a second select-node report for
+    // the same physical gesture.
     expect(inlineModule).toContain(
       "if(canvasNavigationEnabled)return;if(markedNode){const nodeId=markedNode.getAttribute('data-selene-node-id')||'';"
     );
@@ -178,7 +178,7 @@ describe('isolated preview transport', () => {
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
     );
     expect(inlineModule).toContain(
-      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
+      "document.addEventListener('pointerdown',event=>{canvasPointerSelection=false;suppressUnsupportedClick=false;if(!event.isTrusted||!event.isPrimary||event.button!==0)return;"
     );
     // Unsupported hits revoke at the window capture boundary, before generated
     // document handlers can stop propagation or navigate away.
@@ -210,19 +210,18 @@ describe('isolated preview transport', () => {
       "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
     );
     expect(inlineModule).toContain(
-      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;pendingCanvasSelection=undefined;suppressUnsupportedClick=false}}"
+      "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;suppressUnsupportedClick=false}}"
     );
     expect(inlineModule).toContain(
-      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled){canvasPointerSelection=false;pendingCanvasSelection=undefined}return}"
+      "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=false;return}"
     );
-    // Pointerdown owns the gesture but cannot mount host selection chrome; only
-    // the corresponding trusted pointerup is allowed to publish the selection.
+    // Pointerdown is the sole publication owner in packaged previews. The
+    // following click is swallowed before it reaches the document listener.
     expect(inlineModule).toContain(
-      "if(identifier.test(nodeId)){pendingCanvasSelection={type:'select-node',extra:{nodeId,telemetry:elementTelemetry(inspected)}};return}"
+      "if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}"
     );
-    expect(inlineModule).toContain(
-      "addWindowListener('pointerup',event=>{const pending=pendingCanvasSelection;pendingCanvasSelection=undefined;if(!pending||!canvasNavigationEnabled||!event.isTrusted||!event.isPrimary||event.button!==0)return;report(pending.type,pending.extra)}"
-    );
+    expect(inlineModule).not.toContain('pendingCanvasSelection');
+    expect(inlineModule).not.toContain("addWindowListener('pointerup'");
     expect(inlineModule).toContain('telemetry:elementTelemetry(inspected)');
     expect(inlineModule).toContain('left:rect.left,top:rect.top,width:Math.max(0,rect.width)');
     expect(inlineModule).toContain(
