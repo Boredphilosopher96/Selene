@@ -21,6 +21,11 @@ function desktopArgs(userData: string): string[] {
   return [mainEntry, `--user-data-dir=${userData}`];
 }
 
+/** Enables opaque rejection classification only for the protocol harness. */
+function selectionDiagnosticEnvironment(): NodeJS.ProcessEnv {
+  return { ...process.env, SELENE_SELECTION_DIAGNOSTICS: '1' };
+}
+
 async function electronExecutable(): Promise<string> {
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
@@ -194,7 +199,8 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
   const userData = await mkdtemp(join(tmpdir(), 'selene-desktop-cockpit-persona-'));
   const application = await electron.launch({
     executablePath: await electronExecutable(),
-    args: desktopArgs(userData)
+    args: desktopArgs(userData),
+    env: selectionDiagnosticEnvironment()
   });
 
   try {
@@ -254,26 +260,31 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
     });
     await window.mouse.click(mappedPoint.x, mappedPoint.y);
     await expect
-      .poll(() =>
-        window.evaluate(async () => {
-          const snapshot = await window.selene.designer.snapshot();
-          const workspace = document.querySelector<HTMLElement>(
-            'main[aria-label="Selene desktop designer"]'
-          );
-          return {
-            bridgeState:
-              document
-                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
-                ?.getAttribute('data-selene-native-input-state') ?? null,
-            hostSelectedNodeId: snapshot.selectedNodeId ?? null,
-            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
-          };
-        })
-      )
+      .poll(async () => {
+        const [selection, previewStage] = await Promise.all([
+          window.evaluate(async () => {
+            const snapshot = await window.selene.designer.snapshot();
+            const workspace = document.querySelector<HTMLElement>(
+              'main[aria-label="Selene desktop designer"]'
+            );
+            return {
+              bridgeState:
+                document
+                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                  ?.getAttribute('data-selene-native-input-state') ?? null,
+              hostSelectedNodeId: snapshot.selectedNodeId ?? null,
+              stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+            };
+          }),
+          prototype.locator('html').getAttribute('data-selene-native-selection-stage')
+        ]);
+        return { ...selection, previewStage };
+      })
       .toEqual({
         bridgeState: 'posted',
         hostSelectedNodeId: 'designer.action',
-        stage: 'authorized'
+        stage: 'authorized',
+        previewStage: 'relayed'
       });
     const [mappedSelectionParent, mappedSelectionFrame] = await Promise.all([
       window.evaluate(async () => {
@@ -2441,7 +2452,8 @@ test('stages the governed catalog and applies source-backed manual editor operat
   );
   const application = await electron.launch({
     executablePath: await electronExecutable(),
-    args: desktopArgs(userData)
+    args: desktopArgs(userData),
+    env: selectionDiagnosticEnvironment()
   });
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
@@ -2475,23 +2487,35 @@ test('stages the governed catalog and applies source-backed manual editor operat
       mappedTargetBounds.y + mappedTargetBounds.height / 2
     );
     await expect
-      .poll(() =>
-        window.evaluate(async () => {
-          const snapshot = await window.selene.designer.snapshot();
-          const workspace = document.querySelector<HTMLElement>(
-            'main[aria-label="Selene desktop designer"]'
-          );
-          return {
-            bridgeState:
-              document
-                .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
-                ?.getAttribute('data-selene-native-input-state') ?? null,
-            selected: typeof snapshot.selectedNodeId === 'string',
-            stage: workspace?.dataset.selenePreviewSelectionStage ?? null
-          };
-        })
-      )
-      .toEqual({ bridgeState: 'posted', selected: true, stage: 'authorized' });
+      .poll(async () => {
+        const [selection, previewStage] = await Promise.all([
+          window.evaluate(async () => {
+            const snapshot = await window.selene.designer.snapshot();
+            const workspace = document.querySelector<HTMLElement>(
+              'main[aria-label="Selene desktop designer"]'
+            );
+            return {
+              bridgeState:
+                document
+                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                  ?.getAttribute('data-selene-native-input-state') ?? null,
+              selected: typeof snapshot.selectedNodeId === 'string',
+              stage: workspace?.dataset.selenePreviewSelectionStage ?? null
+            };
+          }),
+          window
+            .frameLocator('iframe[title="Generated React preview frame"]')
+            .locator('html')
+            .getAttribute('data-selene-native-selection-stage')
+        ]);
+        return { ...selection, previewStage };
+      })
+      .toEqual({
+        bridgeState: 'posted',
+        selected: true,
+        stage: 'authorized',
+        previewStage: 'relayed'
+      });
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Ask AI', exact: true })
