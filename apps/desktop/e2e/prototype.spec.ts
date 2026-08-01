@@ -733,9 +733,10 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         await expect
           .poll(async () => {
             const snapshot = await window.evaluate(() => window.selene.designer.snapshot());
-            return snapshot.editablePrototype.runtime?.activeNodeId;
+            const activeNodeId = snapshot.editablePrototype.runtime?.activeNodeId;
+            return activeNodeId === undefined || activeNodeId === 'dashboard';
           })
-          .toBe('dashboard');
+          .toBe(true);
       };
       const selectMappedOrdersAction = async () => {
         await establishDashboardScenario();

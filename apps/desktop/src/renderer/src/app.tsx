@@ -228,6 +228,10 @@ export function App() {
   );
   /** A canvas clear must not replay the host's retained node into a new preview frame. */
   const previewSelectionSuppressed = useRef(false);
+  /** Serializes duplicate transport delivery without dropping a later clear gesture. */
+  const previewSelectionClearInFlight = useRef<Promise<void> | undefined>(undefined);
+  const previewSelectionClearTrailing = useRef(false);
+  const previewSelectionClearLatestRequestId = useRef(0);
   currentBuild.current = build;
   if (!previewCanvasNavigation.current)
     previewCanvasNavigation.current = new PreviewCanvasNavigation((enabled) => {
@@ -616,8 +620,9 @@ export function App() {
   const updatePreviewTargetCancel = useCallback((enabled: boolean) => {
     previewTargetCancel.current?.setEnabled(enabled);
   }, []);
-  const clearPreviewSelection = () => {
+  const clearPreviewSelection = useCallback(() => {
     const requestId = ++previewSelectionEpoch.current;
+    previewSelectionClearLatestRequestId.current = requestId;
     previewSelectionSuppressed.current = true;
     // Do not leave a prior host selection visible while the authoritative IPC
     // clear is in flight. The host response below remains the durable source
@@ -636,18 +641,37 @@ export function App() {
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
     setPreviewSelectionClearEpoch((current) => current + 1);
-    void enqueuePreviewSelectionHostOperation(() => window.selene.designer.clearSelectedNode())
-      .then((next) => {
-        if (requestId !== previewSelectionEpoch.current) return;
-        setSnapshot(next);
-      })
-      .catch(() => {
-        if (requestId !== previewSelectionEpoch.current) return;
-        setNotice(
-          'The host could not clear the prior selection. Try selecting a mapped element again.'
-        );
+    if (previewSelectionClearInFlight.current) {
+      previewSelectionClearTrailing.current = true;
+      return;
+    }
+    const clearHostSelection = (clearRequestId: number): void => {
+      const clearOperation = enqueuePreviewSelectionHostOperation(() =>
+        window.selene.designer.clearSelectedNode()
+      )
+        .then((next) => {
+          if (clearRequestId !== previewSelectionEpoch.current) return;
+          setSnapshot(next);
+        })
+        .catch(() => {
+          if (clearRequestId !== previewSelectionEpoch.current) return;
+          setNotice(
+            'The host could not clear the prior selection. Try selecting a mapped element again.'
+          );
+        });
+      previewSelectionClearInFlight.current = clearOperation;
+      void clearOperation.finally(() => {
+        if (previewSelectionClearInFlight.current !== clearOperation) return;
+        if (previewSelectionClearTrailing.current) {
+          previewSelectionClearTrailing.current = false;
+          clearHostSelection(previewSelectionClearLatestRequestId.current);
+          return;
+        }
+        previewSelectionClearInFlight.current = undefined;
       });
-  };
+    };
+    clearHostSelection(requestId);
+  }, [enqueuePreviewSelectionHostOperation]);
 
   useEffect(() => {
     const clearFromActiveFrame = (event: MessageEvent<unknown>) => {

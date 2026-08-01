@@ -27,8 +27,6 @@ export interface ArtifactPreviewContract {
   readonly frame: RefObject<HTMLIFrameElement | null>;
   readonly onFrameLoad: (frame: HTMLIFrameElement) => void;
   readonly onFrameError: (frame: HTMLIFrameElement) => void;
-  /** Parent-side fail-closed revocation before a preview gesture resolves. */
-  readonly onFramePointerDown: () => void;
   readonly pins: readonly ArtifactPin[];
   readonly selectedPinId?: string;
   readonly onSelectPin: (id: string, invoking: HTMLButtonElement) => void;
