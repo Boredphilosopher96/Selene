@@ -383,9 +383,9 @@ p {
   display: grid;
   width: min(22rem, calc(100vw - 1rem));
   max-height: 24rem;
-  gap: 0.55rem;
+  gap: 0.8rem;
   overflow: auto;
-  padding: 0.75rem;
+  padding: 0.9rem;
   border: 1px solid #c9c6f8;
   border-radius: 0.75rem;
   background: #fff;
@@ -441,7 +441,7 @@ p {
   display: flex;
   align-items: start;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 1rem;
 }
 .artifact-thread-popover header p,
 .artifact-thread-message p {
@@ -456,16 +456,19 @@ p {
 .artifact-thread-popover__header-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.4rem;
 }
-.artifact-thread-popover__header-actions button:not(.icon-button) {
-  padding: 0.28rem 0.42rem;
+.artifact-thread-popover__header-button {
+  min-height: 2rem;
+  padding: 0.38rem 0.58rem;
   border: 1px solid #d8dee8;
   border-radius: 0.45rem;
   background: #fff;
   color: #344154;
-  font-size: 0.68rem;
+  font-size: 0.72rem;
   font-weight: 720;
+  line-height: 1;
 }
 .artifact-thread-popover__messages {
   display: grid;
@@ -500,7 +503,7 @@ p {
 .artifact-thread-popover__composer {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.55rem;
   padding-top: 0.6rem;
   border-top: 1px solid #e4e4f5;
 }
@@ -526,7 +529,10 @@ p {
 .artifact-context-popover__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.55rem;
+}
+.artifact-context-popover .primary-button {
+  width: fit-content;
 }
 .artifact-context-popover__inspection {
   overflow: auto;

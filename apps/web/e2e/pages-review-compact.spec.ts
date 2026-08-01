@@ -41,23 +41,25 @@ test('keeps a semantic artifact discussion usable and unclipped at compact width
   const element = review.locator('[data-review-order="#1046"] [data-artifact-field="customer"]');
 
   await element.click();
-  const actions = page.getByRole('dialog', { name: /Actions for .* artifact pin/, exact: true });
+  const actions = page.getByRole('dialog', { name: /Actions for .* review point/, exact: true });
   await expectWithinViewport(page, actions);
   await actions.getByRole('button', { name: 'Comment', exact: true }).click();
 
   const discussion = page.getByRole('dialog', {
-    name: /Discussion on .* artifact pin/,
+    name: /Discussion on .* review point/,
     exact: true
   });
   const composer = discussion.getByLabel('Start revision-bound thread', { exact: true });
-  await composer.fill('Compact semantic thread.');
+  await expect(composer).toBeFocused();
+  await composer.fill('Add a clearer status label before launch.');
   await discussion.getByRole('button', { name: 'Add feedback', exact: true }).click();
-  await expect(discussion).toContainText('Compact semantic thread.');
+  await expect(discussion).toContainText('Add a clearer status label before launch.');
 
   const reply = discussion.getByLabel(/Reply to thread-/);
-  await reply.fill('Compact reply remains in the artifact discussion.');
+  await expect(reply).toBeFocused();
+  await reply.fill('I will include the revised label in the next update.');
   await discussion.getByRole('button', { name: 'Reply', exact: true }).click();
-  await expect(discussion).toContainText('Compact reply remains in the artifact discussion.');
+  await expect(discussion).toContainText('I will include the revised label in the next update.');
   await expectWithinViewport(page, discussion);
   await attachArtifactThreadScreenshot(page, testInfo);
 

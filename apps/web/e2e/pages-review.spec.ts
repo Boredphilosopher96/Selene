@@ -34,7 +34,7 @@ async function selectElement(page: Page, field: 'customer' | 'status' | 'total')
   );
   const element = review.locator(`[data-review-order="#1046"] [data-artifact-field="${field}"]`);
   await element.click();
-  const actions = page.getByRole('dialog', { name: /Actions for .* artifact pin/, exact: true });
+  const actions = page.getByRole('dialog', { name: /Actions for .* review point/, exact: true });
   await expect(actions).toBeVisible();
   return { actions, element, review };
 }
@@ -43,7 +43,7 @@ async function createThread(page: Page, field: 'customer' | 'status' | 'total', 
   const { actions } = await selectElement(page, field);
   await actions.getByRole('button', { name: 'Comment', exact: true }).click();
   const discussion = page.getByRole('dialog', {
-    name: /Discussion on .* artifact pin/,
+    name: /Discussion on .* review point/,
     exact: true
   });
   await discussion.getByLabel('Start revision-bound thread', { exact: true }).fill(body);
@@ -60,7 +60,11 @@ async function attachArtifactThreadScreenshot(page: Page, testInfo: TestInfo, na
 
 test('attaches wide artifact-thread visual evidence', async ({ page }, testInfo) => {
   await page.goto('/Selene/demo/review/prototype');
-  const discussion = await createThread(page, 'status', 'Wide artifact-thread evidence.');
+  const discussion = await createThread(
+    page,
+    'status',
+    'Could we make the shipment status easier to scan before launch?'
+  );
 
   await expect(discussion).toBeVisible();
   await attachArtifactThreadScreenshot(page, testInfo, 'wide-artifact-thread');
@@ -85,7 +89,7 @@ test('uses one semantic selection and artifact-local Comment and Inspect actions
   await expect(actions.getByText('Read only', { exact: true })).toBeVisible();
   await actions.getByRole('button', { name: 'Comment', exact: true }).click();
   await expect(
-    page.getByRole('dialog', { name: 'Discussion on OrderStatus artifact pin', exact: true })
+    page.getByRole('dialog', { name: 'Discussion on Order status review point', exact: true })
   ).toBeVisible();
 });
 
@@ -127,7 +131,7 @@ test('deep-links a baseline change only after resolving its live semantic elemen
 
   await expect(page).toHaveURL(/\/Selene\/demo\/review\/prototype$/);
   await expect(
-    page.getByRole('dialog', { name: 'Discussion on OrdersReviewRow artifact pin', exact: true })
+    page.getByRole('dialog', { name: 'Discussion on Order row review point', exact: true })
   ).toBeVisible();
   await expect(review.locator('.artifact-selection-outline')).toBeVisible();
   await expect(review.getByRole('status', { name: 'Artifact selection status' })).toContainText(
@@ -159,7 +163,7 @@ test('persists multiple artifact threads and supports reload, replies, resolve, 
   await page.reload();
   await review.locator('.artifact-pin-control').nth(0).click();
   const restored = page.getByRole('dialog', {
-    name: /Discussion on .* artifact pin/,
+    name: /Discussion on .* review point/,
     exact: true
   });
   await expect(restored).toContainText('Keep the shipped status treatment.');

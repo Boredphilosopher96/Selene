@@ -523,7 +523,7 @@ function anchorsMatch(
 }
 
 function formatAnchor(anchor: ArtifactAnchor): string {
-  return `${anchor.component} artifact pin`;
+  return `${anchor.component === 'OrderStatus' ? 'Order status' : 'Order row'} review point`;
 }
 
 function semanticAnchorForElement(
@@ -933,13 +933,14 @@ function ArtifactThreadPopover({
       : threads.findIndex((thread) => thread.id === activeThreadId);
   const activeIndex = selectedIndex < 0 ? -1 : selectedIndex;
   const activeThread = activeIndex < 0 ? undefined : threads[activeIndex];
-  useEffect(() => {
+  useLayoutEffect(() => {
     const popover = popoverRef.current;
     if (popover === null) return;
     const composer = popover.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)');
+    const reopen = popover.querySelector<HTMLElement>('[aria-label="Reopen thread"]');
     const firstControl = popover.querySelector<HTMLElement>('button:not(:disabled)');
-    (composer ?? firstControl)?.focus();
-  }, []);
+    (composer ?? reopen ?? firstControl)?.focus();
+  }, [activeThread?.id, anchor]);
   const send = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -965,25 +966,36 @@ function ArtifactThreadPopover({
     >
       <header>
         <div>
-          <p className="eyebrow">Artifact pin</p>
+          <p className="eyebrow">Review discussion</p>
           <strong>{formatAnchor(anchor)}</strong>
           {activeThread === undefined ? null : (
             <span className="artifact-thread-popover__count">
-              Pin {activeIndex + 1} of {threads.length}
+              Thread {activeIndex + 1} of {threads.length}
             </span>
           )}
         </div>
         <div className="artifact-thread-popover__header-actions">
           {activeThread === undefined ? null : (
             <>
-              <button type="button" onClick={() => navigate(-1)} aria-label="Previous pin">
-                ‹
-              </button>
-              <button type="button" onClick={() => navigate(1)} aria-label="Next pin">
-                ›
+              <button
+                type="button"
+                className="artifact-thread-popover__header-button"
+                onClick={() => navigate(-1)}
+                aria-label="Previous pin"
+              >
+                Previous
               </button>
               <button
                 type="button"
+                className="artifact-thread-popover__header-button"
+                onClick={() => navigate(1)}
+                aria-label="Next pin"
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                className="artifact-thread-popover__header-button"
                 aria-label={activeThread.status === 'open' ? 'Resolve thread' : 'Reopen thread'}
                 onClick={() =>
                   void (activeThread.status === 'open'
@@ -997,11 +1009,11 @@ function ArtifactThreadPopover({
           )}
           <button
             type="button"
-            className="icon-button"
+            className="artifact-thread-popover__header-button"
             onClick={onClose}
             aria-label="Close pin discussion"
           >
-            ×
+            Close
           </button>
         </div>
       </header>
@@ -1104,11 +1116,11 @@ function ArtifactContextPopover({
   readonly onClose: () => void;
 }) {
   const popoverRef = useRef<HTMLElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const popover = popoverRef.current;
     if (popover === null) return;
     popover.querySelector<HTMLElement>('[data-artifact-action="comment"]')?.focus();
-  }, []);
+  }, [anchor]);
   return (
     <section
       ref={popoverRef}
@@ -1123,11 +1135,16 @@ function ArtifactContextPopover({
     >
       <header>
         <div>
-          <p className="eyebrow">Artifact element</p>
+          <p className="eyebrow">Review actions</p>
           <strong>{formatAnchor(anchor)}</strong>
         </div>
-        <button type="button" className="icon-button" onClick={onClose} aria-label="Close actions">
-          ×
+        <button
+          type="button"
+          className="artifact-thread-popover__header-button"
+          onClick={onClose}
+          aria-label="Close actions"
+        >
+          Close
         </button>
       </header>
       <div className="artifact-context-popover__actions" aria-label="Artifact actions">
@@ -1757,11 +1774,12 @@ export function HostedReviewPortal({
   }
 
   function closeArtifactPopover() {
+    const trigger = artifactPinTrigger.current;
     setActiveAnchor(undefined);
     setActiveThreadId(undefined);
     setArtifactPopoverView('actions');
     setNotice('Artifact pin discussion closed.');
-    requestAnimationFrame(() => artifactPinTrigger.current?.focus());
+    requestAnimationFrame(() => trigger?.focus());
   }
 
   function selectSemanticArtifact(orderId: string, field: ArtifactField, element: HTMLElement) {
