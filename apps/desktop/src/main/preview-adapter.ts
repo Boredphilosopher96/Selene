@@ -142,16 +142,10 @@ function selectionProofRejection(
   headers: Readonly<Record<string, string>>,
   reason: string
 ): Response {
-  const diagnosticsEnabled = process.env.SELENE_SELECTION_DIAGNOSTICS === '1';
-  return new Response(
-    diagnosticsEnabled
-      ? `Preview selection proof is unavailable:${reason}`
-      : 'Preview selection proof is unavailable',
-    {
-      status: 403,
-      headers: { ...headers, 'X-Selene-Selection-Diagnostic': reason }
-    }
-  );
+  return new Response(`Preview selection proof is unavailable:${reason}`, {
+    status: 403,
+    headers: { ...headers, 'X-Selene-Selection-Diagnostic': reason }
+  });
 }
 
 /** Registry-owned target reconstructed only when an opaque preview proof is consumed. */
