@@ -9,3 +9,11 @@ export function shouldClearPreviewTelemetry(
 ): boolean {
   return observedSelectedNodeId === undefined && currentSelectedNodeId === undefined;
 }
+
+/** A renderer selection can act only after both independent authority fences settle. */
+export function isPreviewSelectionAuthorized(
+  hostConfirmed: boolean,
+  hasSelectionProof: boolean
+): boolean {
+  return hostConfirmed && hasSelectionProof;
+}

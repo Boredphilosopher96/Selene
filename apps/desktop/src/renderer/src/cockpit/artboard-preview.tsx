@@ -18,7 +18,7 @@ import {
   type PreviewMappedElementTelemetrySelection
 } from '../../../shared/preview-channel';
 import type { ArtifactPreviewContract } from './artifact-preview-contracts';
-import { safeDesignerNotice } from '../presentation-error';
+import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import {
   artifactAlignItemsValues,
   artifactGapPixels,
@@ -2180,7 +2180,8 @@ export function ArtboardPreview({
                             setThreadDraftStableKey('');
                             setCommentStatus(undefined);
                           },
-                          () => setCommentStatus('Could not save this review thread.')
+                          (error: unknown) =>
+                            setCommentStatus(presentDesignerError(error, 'review'))
                         )
                         .finally(() => setCommentSubmitting(false));
                     }}

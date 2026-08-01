@@ -285,7 +285,7 @@ test('keeps the packaged designer cockpit usable across wide and compact inspect
           frame: mappedSelectionFrame,
           frameHit: mappedFrameHit,
           parent: mappedSelectionParent,
-          plane: mappedPlaneHit
+          frameOwner: mappedFrameOwner
         },
         null,
         2
