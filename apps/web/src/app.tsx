@@ -584,27 +584,68 @@ function ArtifactPopoverLayer({
   readonly children: ReactNode;
 }) {
   const [position, setPosition] = useState<{ readonly left: number; readonly top: number }>();
+  const popoverLayerRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
+    let animationFrame: number | undefined;
+    const scheduleConstraint = () => {
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(() => {
+        animationFrame = undefined;
+        const layer = popoverLayerRef.current;
+        if (layer === null) return;
+        const popover = layer.firstElementChild;
+        if (popover === null) return;
+        const bounds = popover.getBoundingClientRect();
+        const viewportInset = 8;
+        const horizontalOffset =
+          bounds.left < viewportInset
+            ? viewportInset - bounds.left
+            : Math.min(0, window.innerWidth - viewportInset - bounds.right);
+        const verticalOffset =
+          bounds.top < viewportInset
+            ? viewportInset - bounds.top
+            : Math.min(0, window.innerHeight - viewportInset - bounds.bottom);
+        if (horizontalOffset === 0 && verticalOffset === 0) return;
+        setPosition((current) =>
+          current === undefined
+            ? current
+            : {
+                left: current.left + horizontalOffset,
+                top: current.top + verticalOffset
+              }
+        );
+      });
+    };
     const updatePosition = () => {
       const bounds = surface.getBoundingClientRect();
       setPosition({
         left: bounds.left + bounds.width * anchor.point.x,
         top: bounds.top + bounds.height * anchor.point.y
       });
+      scheduleConstraint();
     };
     updatePosition();
+    const mutationObserver = new MutationObserver(scheduleConstraint);
+    const layer = popoverLayerRef.current;
+    if (layer !== null) mutationObserver.observe(layer, { childList: true, subtree: true });
     window.addEventListener('resize', updatePosition);
     window.addEventListener('scroll', updatePosition, true);
     return () => {
+      if (animationFrame !== undefined) window.cancelAnimationFrame(animationFrame);
+      mutationObserver.disconnect();
       window.removeEventListener('resize', updatePosition);
       window.removeEventListener('scroll', updatePosition, true);
     };
   }, [anchor.point.x, anchor.point.y, surface]);
-  if (position === undefined) return null;
   return createPortal(
     <div
+      ref={popoverLayerRef}
       className="artifact-popover-layer"
-      style={{ left: `${position.left}px`, top: `${position.top}px` }}
+      style={
+        position === undefined
+          ? { left: 0, top: 0, visibility: 'hidden' }
+          : { left: `${position.left}px`, top: `${position.top}px` }
+      }
     >
       {children}
     </div>,

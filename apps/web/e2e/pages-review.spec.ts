@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import { expect, test, type Download, type Page } from '@playwright/test';
+import { expect, test, type Download, type Page, type TestInfo } from '@playwright/test';
 
 const collaborationStorageKey =
   'selene.hosted-review-collaboration.v2.northstar.orders-r18-7f3a.orders-r17-b9c1';
@@ -51,6 +51,20 @@ async function createThread(page: Page, field: 'customer' | 'status' | 'total', 
   await expect(discussion).toContainText(body);
   return discussion;
 }
+
+async function attachArtifactThreadScreenshot(page: Page, testInfo: TestInfo, name: string) {
+  const screenshotPath = testInfo.outputPath(`${name}.png`);
+  await page.screenshot({ path: screenshotPath });
+  await testInfo.attach(name, { path: screenshotPath, contentType: 'image/png' });
+}
+
+test('attaches wide artifact-thread visual evidence', async ({ page }, testInfo) => {
+  await page.goto('/Selene/demo/review/prototype');
+  const discussion = await createThread(page, 'status', 'Wide artifact-thread evidence.');
+
+  await expect(discussion).toBeVisible();
+  await attachArtifactThreadScreenshot(page, testInfo, 'wide-artifact-thread');
+});
 
 test('uses one semantic selection and artifact-local Comment and Inspect actions', async ({
   page
