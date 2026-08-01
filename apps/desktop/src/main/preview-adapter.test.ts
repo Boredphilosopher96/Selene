@@ -168,11 +168,11 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(match)report('inspect-node-result',{nodeId,telemetry:elementTelemetry(match)})"
     );
-    // Canvas-mode selection is published first from trusted pointerdown. The
-    // document click listener only falls back when that event was absent, and
-    // never emits a second select-node report for the same physical gesture.
+    // Canvas-mode selection is published first from trusted pointerdown. A
+    // pre-import window-capture click fallback runs only when that event was
+    // absent, so generated handlers cannot block the authenticated bridge.
     expect(inlineModule).toContain(
-      "if(canvasNavigationEnabled){if(canvasPointerSelection){canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[]);return}const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}"
+      "addWindowListener('click',event=>{if(!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}if(canvasPointerSelection){canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[]);return}const target=event.target instanceof Element?event.target:null;if(!target){report('clear-selection');return}const markedNode=target.closest('[data-selene-node-id]');const inspected=markedNode||target;"
     );
     expect(inlineModule).not.toContain(
       "if(canvasNavigationEnabled){const inspected=markedNode||target;const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';"
@@ -207,7 +207,7 @@ describe('isolated preview transport', () => {
       'canvasPointerSelection=true;apply(preventDefault,event,[]);apply(stopImmediate,event,[])'
     );
     expect(inlineModule).toContain(
-      "addWindowListener('click',event=>{if(!canvasPointerSelection||!canvasNavigationEnabled||!event.isTrusted){if(!canvasNavigationEnabled)canvasPointerSelection=false;return}canvasPointerSelection=false;apply(preventDefault,event,[]);apply(stopImmediate,event,[])"
+      "const nodeId=apply(getAttribute,inspected,['data-selene-node-id'])||'';apply(preventDefault,event,[]);apply(stopImmediate,event,[]);if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}report('clear-selection');inspectElementSequence+=1;report('inspect-element'"
     );
     expect(inlineModule).toContain(
       "addWindowListener('pointercancel',event=>{if(event.isTrusted&&event.isPrimary){canvasPointerSelection=false;suppressUnsupportedClick=false}}"
@@ -215,8 +215,8 @@ describe('isolated preview transport', () => {
     expect(inlineModule).toContain(
       "if(message.type==='canvas-navigation'){canvasNavigationEnabled=message.enabled;if(!message.enabled)canvasPointerSelection=false;return}"
     );
-    // Pointerdown is the sole publication owner in packaged previews. The
-    // following click is swallowed before it reaches the document listener.
+    // Pointerdown is the primary publication owner. Its following click is
+    // swallowed at window capture; otherwise that same boundary falls back.
     expect(inlineModule).toContain(
       "if(identifier.test(nodeId)){report('select-node',{nodeId,telemetry:elementTelemetry(inspected)});return}"
     );
@@ -274,9 +274,7 @@ describe('isolated preview transport', () => {
       "report('clear-selection');inspectElementSequence+=1;report('inspect-element'";
     expect(inlineModule).toContain(actionCapture);
     expect(inlineModule).toContain(unsupportedClear);
-    expect(inlineModule).toContain(
-      'if(canvasNavigationEnabled){if(canvasPointerSelection){canvasPointerSelection=false;'
-    );
+    expect(inlineModule).toContain('if(canvasNavigationEnabled)return;if(markedNode){');
     const clickNavigation = inlineModule.indexOf(
       'if(canvasNavigationEnabled)',
       inlineModule.indexOf(actionCapture)
