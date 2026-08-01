@@ -2731,44 +2731,14 @@ test('stages the governed catalog and applies source-backed manual editor operat
       await expect(
         window.getByRole('button', { name: 'Move selected element', exact: true })
       ).toHaveCount(0);
-      let expectedFrameIdentity: string | null = null;
-      let expectedRevisionId = '';
-      let frameBounds: Awaited<ReturnType<typeof previewFrame.boundingBox>> | undefined;
-      let frameMetrics:
-        | {
-            readonly clientHeight: number;
-            readonly clientLeft: number;
-            readonly clientTop: number;
-            readonly clientWidth: number;
-            readonly offsetHeight: number;
-            readonly offsetWidth: number;
-          }
-        | undefined;
-      let rootTarget:
-        | {
-            readonly candidates: readonly {
-              readonly candidate: Readonly<{ x: number; y: number }>;
-              readonly hitNodeId: string;
-            }[];
-            readonly rootBounds: Readonly<{
-              height: number;
-              left: number;
-              top: number;
-              width: number;
-            }>;
-            readonly viewport: Readonly<{ height: number; width: number }>;
-          }
-        | undefined;
-      let samplingError: unknown;
-      /* eslint-disable no-await-in-loop -- frame replacement retries must be revision-fenced and sequential */
-      for (let attempt = 1; attempt <= 3; attempt += 1) {
-        expectedFrameIdentity = await previewFrame.getAttribute('src');
-        expectedRevisionId = await window.evaluate(async () => {
-          return (await window.selene.designer.snapshot()).source.revision.id;
-        });
-        try {
-          [frameBounds, frameMetrics, rootTarget] = await Promise.all([
+      const sampleRootTarget = async () => {
+        const [frameBounds, frameIdentity, sourceRevisionId, frameMetrics, rootTarget] =
+          await Promise.all([
             previewFrame.boundingBox(),
+            previewFrame.getAttribute('src'),
+            window.evaluate(
+              async () => (await window.selene.designer.snapshot()).source.revision.id
+            ),
             previewFrame.evaluate((frame) => ({
               clientHeight: frame.clientHeight,
               clientLeft: frame.clientLeft,
@@ -2813,48 +2783,80 @@ test('stages the governed catalog and applies source-backed manual editor operat
               };
             })
           ]);
-          const [observedFrameIdentity, observedRevisionId] = await Promise.all([
-            previewFrame.getAttribute('src'),
-            window.evaluate(
-              async () => (await window.selene.designer.snapshot()).source.revision.id
-            )
-          ]);
-          if (
-            observedFrameIdentity !== expectedFrameIdentity ||
-            observedRevisionId !== expectedRevisionId
-          )
-            throw new Error('Preview identity changed while root geometry was sampled.');
-          samplingError = undefined;
-          break;
+        return { frameBounds, frameIdentity, frameMetrics, rootTarget, sourceRevisionId };
+      };
+      const stabilityStartedAt = Date.now();
+      let lastSamplingError: unknown;
+      const waitForStableRootTarget = async (
+        previousSignature?: string,
+        stableSince = Date.now()
+      ): Promise<Awaited<ReturnType<typeof sampleRootTarget>> | undefined> => {
+        try {
+          const sample = await sampleRootTarget();
+          lastSamplingError = undefined;
+          // Frame identity, source revision, physical frame geometry, and source-bound
+          // candidate coordinates all participate in this signature.
+          const signature = JSON.stringify(sample);
+          const now = Date.now();
+          const nextStableSince = signature === previousSignature ? stableSince : now;
+          if (now - nextStableSince >= 200) return sample;
+          if (now - stabilityStartedAt >= 5_000) return undefined;
+          await window.evaluate(
+            () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          );
+          return waitForStableRootTarget(signature, nextStableSince);
         } catch (error) {
-          samplingError = error;
-          frameBounds = undefined;
-          frameMetrics = undefined;
-          rootTarget = undefined;
-          await expect(root).toBeVisible({ timeout: previewPresentationTimeout });
+          lastSamplingError = error;
+          const remaining = 5_000 - (Date.now() - stabilityStartedAt);
+          if (remaining <= 0) return undefined;
+          try {
+            await expect(root).toBeVisible({
+              timeout: Math.min(remaining, previewPresentationTimeout)
+            });
+          } catch (visibilityError) {
+            lastSamplingError = visibilityError;
+          }
+          if (Date.now() - stabilityStartedAt >= 5_000) return undefined;
+          await window.evaluate(
+            () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+          );
+          return waitForStableRootTarget(undefined, Date.now());
         }
-      }
-      /* eslint-enable no-await-in-loop */
-      if (!frameBounds || !frameMetrics || !rootTarget) {
-        const observedFrameIdentity = await previewFrame.getAttribute('src').catch(() => null);
+      };
+      const stableSample = await waitForStableRootTarget();
+      if (stableSample === undefined) {
+        const lastSamplingErrorMessage =
+          lastSamplingError instanceof Error
+            ? lastSamplingError.message
+            : lastSamplingError === undefined
+              ? null
+              : String(lastSamplingError);
         await test.info().attach('manual-root-selection-stale-preview.json', {
           body: JSON.stringify(
             {
-              error: samplingError instanceof Error ? samplingError.message : String(samplingError),
-              expectedFrameIdentity,
-              expectedRevisionId,
-              observedFrameIdentity
+              error: 'The canonical preview root target changed during the canvas refit.',
+              lastSamplingError: lastSamplingErrorMessage,
+              observedFrameIdentity: await previewFrame.getAttribute('src').catch(() => null)
             },
             null,
             2
           ),
           contentType: 'application/json'
         });
-        throw new Error('Canonical preview frame changed before physical root selection.', {
-          cause: samplingError
-        });
+        throw lastSamplingError === undefined
+          ? new Error('Canonical preview frame changed before physical root selection.')
+          : new Error('Canonical preview frame changed before physical root selection.', {
+              cause: lastSamplingError
+            });
       }
-      if (frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
+      const {
+        frameBounds,
+        frameIdentity: expectedFrameIdentity,
+        frameMetrics,
+        rootTarget,
+        sourceRevisionId: expectedRevisionId
+      } = stableSample;
+      if (!frameBounds || frameMetrics.offsetWidth <= 0 || frameMetrics.offsetHeight <= 0)
         throw new Error('Mapped flex root preview frame has no usable border box.');
       expect(rootTarget.viewport).toEqual({
         height: frameMetrics.clientHeight,
@@ -2907,7 +2909,29 @@ test('stages the governed catalog and applies source-backed manual editor operat
       if (!selectedRootCandidate)
         throw new Error('Mapped flex root has no source-bound candidate inside the preview frame.');
       const rootClickPoint = selectedRootCandidate.point;
-      expect(selectedRootCandidate.parentHit).toEqual({ bridge: true, tagName: 'DIV' });
+      // Sample once more immediately before click. A new frame, revision,
+      // physical transform, or candidate invalidates the 200ms stable target.
+      const immediatelyRecheckedSample = await sampleRootTarget();
+      expect(JSON.stringify(immediatelyRecheckedSample)).toBe(JSON.stringify(stableSample));
+      const [immediateFrameHit, immediateParentHit] = await Promise.all([
+        prototype.locator('html').evaluate((_documentRoot, framePoint) => {
+          const hit = document.elementFromPoint(framePoint.x, framePoint.y);
+          return {
+            nodeId:
+              hit?.closest('[data-selene-node-id]')?.getAttribute('data-selene-node-id') ?? null,
+            tagName: hit?.tagName ?? null
+          };
+        }, selectedRootCandidate.candidate),
+        window.evaluate((mappedPoint) => {
+          const hit = document.elementFromPoint(mappedPoint.x, mappedPoint.y);
+          return {
+            bridge: hit?.hasAttribute('data-selene-native-input-bridge') ?? false,
+            tagName: hit?.tagName ?? null
+          };
+        }, rootClickPoint)
+      ]);
+      expect(immediateFrameHit.nodeId).toBe('designer.root');
+      expect(immediateParentHit).toEqual({ bridge: true, tagName: 'DIV' });
       await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
       await expect
         .poll(() =>
