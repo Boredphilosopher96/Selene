@@ -661,7 +661,7 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               {frameState === 'loading' ? 'Loading screen…' : 'Screen preview unavailable.'}
             </p>
           )}
-          {data.review?.pins.map((pin) => (
+          {data.review?.pins.map((pin, index) => (
             <button
               key={pin.id}
               className="preview-pin canvas-artboard__reference-pin nodrag nopan"
@@ -670,7 +670,7 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               type="button"
               inert={data.review?.inert || undefined}
               aria-pressed={data.review?.selectedPinId === pin.id}
-              aria-label={`Select artifact pin marker: ${pin.label}`}
+              aria-label={`View stakeholder review thread: ${index + 1}. ${pin.label}`}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.stopPropagation();
@@ -679,7 +679,9 @@ function ReferenceArtboard({ id, data, selected }: NodeProps<ReferenceArtboardNo
               }}
               style={{ left: `${pin.anchor.x * 100}%`, top: `${pin.anchor.y * 100}%` }}
             >
-              <span aria-hidden="true">•</span>
+              <span aria-hidden="true" className="preview-pin__number">
+                {index + 1}
+              </span>
               <span className="preview-pin__label">{pin.label}</span>
             </button>
           ))}

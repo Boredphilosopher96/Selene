@@ -721,6 +721,14 @@ export function DesktopCockpit({
     body: string,
     invoking: HTMLButtonElement
   ): Promise<void> => {
+    if (
+      canvasMode !== 'design' ||
+      !previewDirectSelectionAuthorized ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry.nodeId !== selection.nodeId ||
+      currentPreviewTelemetry.revisionId !== selection.revisionId
+    )
+      throw new Error('Select a mapped React element again before starting a thread.');
     const preview = frame.current;
     const anchor =
       preview === null
@@ -742,14 +750,22 @@ export function DesktopCockpit({
     const created = next.reviewThreads.find(
       (thread) => !snapshot.reviewThreads.some((current) => current.id === thread.id)
     );
+    if (created === undefined)
+      throw new Error('The review thread was not projected to this artifact. Try sending again.');
+    const pin = next.artifactPins.find((candidate) => candidate.id === created.id);
+    if (pin === undefined)
+      throw new Error('The review thread was saved without an artifact pin. Try sending again.');
     onSnapshot(next);
-    if (created) {
-      threadInvokingControl.current = invoking;
-      setSelectedThreadId(created.id);
-      setSelectedArtifactPinId(next.artifactPins.find((pin) => pin.id === created.id)?.id);
-      setThreadStatus(undefined);
-      if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
-    }
+    threadInvokingControl.current = invoking;
+    setSelectedThreadId(created.id);
+    setSelectedArtifactPinId(pin.id);
+    setThreadStatus(undefined);
+    if (!belongsToActiveArtifact(created.anchor, snapshot.source.projectId, activeScreenId))
+      setArtifactFocusRequest({
+        artifactId: created.anchor.screenId,
+        requestId: ++artifactFocusSequence.current
+      });
+    if (asksAi) enqueueThreadAiRequest(created, 'the @AI mention');
   };
   const replyToSelectedThread = async (id: string, body: string): Promise<void> => {
     if (threadActionRef.current !== 'idle') return;

@@ -659,13 +659,13 @@ export function PreviewSurface({
                     }}
                   />
                 ) : null}
-                {pins.map((pin) => (
+                {pins.map((pin, index) => (
                   <button
                     key={pin.id}
                     className="preview-pin"
                     type="button"
                     aria-pressed={selectedPinId === pin.id}
-                    aria-label={`Select artifact pin marker: ${pin.label}`}
+                    aria-label={`View stakeholder review thread: ${index + 1}. ${pin.label}`}
                     onClick={(event) => onSelectPin(pin.id, event.currentTarget)}
                     style={
                       {
@@ -675,7 +675,9 @@ export function PreviewSurface({
                       } as CSSProperties
                     }
                   >
-                    <span aria-hidden="true">•</span>
+                    <span aria-hidden="true" className="preview-pin__number">
+                      {index + 1}
+                    </span>
                     <span className="preview-pin__label">{pin.label}</span>
                   </button>
                 ))}

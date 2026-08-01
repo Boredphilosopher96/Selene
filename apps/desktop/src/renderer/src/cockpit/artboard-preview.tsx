@@ -284,27 +284,26 @@ export function ArtifactThreadCard({
         <span className="spatial-thread-card__identity">
           <b aria-hidden="true">#{threadIndex + 1}</b>
           <span>
-            <strong>Stakeholder thread</strong>
+            <strong>
+              {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
+            </strong>
             <small>
               {selectedThread.status === 'resolved' ? 'Resolved' : 'Open'} · {threadIndex + 1} of{' '}
-              {threadCount}
+              {threadCount} · {selectedThread.replies.length}{' '}
+              {selectedThread.replies.length === 1 ? 'reply' : 'replies'}
             </small>
           </span>
         </span>
         <span className="spatial-thread-card__header-actions">
           <button
             type="button"
-            aria-label={
-              selectedThread.status === 'resolved'
-                ? 'Reopen review thread'
-                : 'Resolve review thread'
-            }
+            aria-label={selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}
             disabled={threadAction !== 'idle'}
             onClick={() =>
               void onResolveThread(selectedThread.id, selectedThread.status !== 'resolved')
             }
           >
-            {selectedThread.status === 'resolved' ? '↺' : '✓'}
+            {selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}
           </button>
           <button type="button" aria-label="Close selected review thread" onClick={onCloseThread}>
             ×
@@ -371,6 +370,7 @@ export function ArtifactThreadCard({
           <button
             className="spatial-thread-card__mention-ai"
             type="button"
+            aria-label="Insert @AI mention"
             disabled={threadAction !== 'idle' || selectedThread.status === 'resolved'}
             onClick={onInsertAiMention}
           >
@@ -400,6 +400,7 @@ export function ArtifactThreadCard({
           <button
             className="spatial-thread-card__send"
             type="submit"
+            aria-label="Reply"
             aria-keyshortcuts="Meta+Enter Control+Enter"
             disabled={
               threadAction !== 'idle' || selectedThread.status === 'resolved' || !replyBody.trim()
@@ -1984,7 +1985,7 @@ export function ArtboardPreview({
           />
         ) : null}
         {commentsVisible
-          ? pins.map((pin) => (
+          ? pins.map((pin, index) => (
               <button
                 key={pin.id}
                 className="preview-pin nodrag nopan"
@@ -1992,7 +1993,7 @@ export function ArtboardPreview({
                 data-review-thread-id={pin.id}
                 type="button"
                 aria-pressed={selectedPinId === pin.id}
-                aria-label={`Select artifact pin marker: ${pin.label}`}
+                aria-label={`View stakeholder review thread: ${index + 1}. ${pin.label}`}
                 onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -2004,7 +2005,9 @@ export function ArtboardPreview({
                   top: `${pin.anchor.y * 100}%`
                 }}
               >
-                <span aria-hidden="true">•</span>
+                <span aria-hidden="true" className="preview-pin__number">
+                  {index + 1}
+                </span>
                 <span className="preview-pin__label">{pin.label}</span>
               </button>
             ))

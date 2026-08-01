@@ -267,15 +267,17 @@
   background: transparent;
   box-shadow: 0 0 0 2px #6d4fd6;
 }
-.designer-workspace .preview-pin > span[aria-hidden='true'] {
+.designer-workspace .preview-pin__number {
   display: grid;
-  width: 6px;
-  height: 6px;
+  width: 20px;
+  height: 20px;
   border-radius: 999px;
   place-items: center;
-  background: currentColor;
-  color: transparent;
-  font-size: 0;
+  background: #6d4fd6;
+  color: #fff;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
   pointer-events: none;
 }
 .designer-workspace .preview-pin:focus-visible {

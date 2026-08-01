@@ -594,6 +594,15 @@ export function App() {
   const clearPreviewSelection = () => {
     const requestId = ++previewSelectionEpoch.current;
     previewSelectionSuppressed.current = true;
+    // Do not leave a prior host selection visible while the authoritative IPC
+    // clear is in flight. The host response below remains the durable source
+    // of truth, but unsupported preview inspection can never retain a usable
+    // renderer target during that round trip.
+    setSnapshot((current) => {
+      if (current?.selectedNodeId === undefined) return current;
+      const { selectedNodeId: _selectedNodeId, ...withoutSelectedNode } = current;
+      return withoutSelectedNode;
+    });
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
     setPreviewSelectionClearEpoch((current) => current + 1);

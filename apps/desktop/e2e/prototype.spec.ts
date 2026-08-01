@@ -736,6 +736,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await createReviewThread('Clarify the next step for this order.');
       const selectedThreadCard = window.getByRole('dialog', { name: /Review thread from/ });
       await expect(selectedThreadCard).toContainText('Clarify the next step for this order.');
+      const artifactPins = window.getByRole('button', {
+        name: /^View stakeholder review thread:/
+      });
+      await expect(artifactPins).toHaveCount(2);
+      await expect(artifactPins.nth(0)).toHaveAttribute(
+        'aria-label',
+        'View stakeholder review thread: 1. Keep the orders action easy to find.'
+      );
+      await expect(artifactPins.nth(1)).toHaveAttribute(
+        'aria-label',
+        'View stakeholder review thread: 2. Clarify the next step for this order.'
+      );
       const screenSpaceThreadEvidence = await selectedThreadCard.evaluate((card) => {
         const canvas = card.closest<HTMLElement>('.canvas-workspace');
         const artifact = canvas?.querySelector<HTMLElement>('.canvas-artboard__compiled');
@@ -813,7 +825,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       );
       await expect(selectedThreadCard).toContainText('1 reply');
       await expect(
-        selectedThreadCard.getByRole('button', { name: 'Ask AI', exact: true })
+        selectedThreadCard.getByRole('button', { name: 'Insert @AI mention', exact: true })
       ).toBeEnabled();
       await selectedThreadCard.getByRole('button', { name: 'Resolve', exact: true }).click();
       await expect(selectedThreadCard).toContainText('Resolved review');
