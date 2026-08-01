@@ -1026,13 +1026,16 @@ export function DesktopCockpit({
     if (mode === 'present') {
       setSelectedThreadId(undefined);
       setSelectedArtifactPinId(undefined);
-      if (await runCommittedGraph()) {
-        // The iframe's capture listener uses this policy to distinguish a
-        // design-canvas selection from a live prototype action. Publish it
-        // before exposing presentation so the first click cannot be eaten by
-        // a stale design-mode bridge command.
-        onCanvasNavigationChange(false);
-        setCanvasMode('present');
+      // Disable authoring interception and move the existing artifact into the
+      // presentation surface before compiling its run build. The resulting
+      // preview URL is then loaded exactly once by the presentation iframe,
+      // rather than first loading under React Flow and being immediately
+      // remounted after its ready handshake.
+      onCanvasNavigationChange(false);
+      setCanvasMode('present');
+      if (!(await runCommittedGraph())) {
+        setCanvasMode('design');
+        onCanvasNavigationChange(true);
       }
       return;
     }

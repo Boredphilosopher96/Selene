@@ -98,6 +98,24 @@ const nativeDocumentElementFromPoint = document.elementFromPoint.bind(document);
 const nativeDocumentQuerySelectorAll = document.querySelectorAll.bind(document);
 const nativeFrameBounds = Element.prototype.getBoundingClientRect;
 const nativeFrameClosest = Element.prototype.closest;
+const nativeFrameClientHeight = Object.getOwnPropertyDescriptor(
+  Element.prototype,
+  'clientHeight'
+)?.get;
+const nativeFrameClientLeft = Object.getOwnPropertyDescriptor(Element.prototype, 'clientLeft')?.get;
+const nativeFrameClientTop = Object.getOwnPropertyDescriptor(Element.prototype, 'clientTop')?.get;
+const nativeFrameClientWidth = Object.getOwnPropertyDescriptor(
+  Element.prototype,
+  'clientWidth'
+)?.get;
+const nativeFrameOffsetHeight = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'offsetHeight'
+)?.get;
+const nativeFrameOffsetWidth = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'offsetWidth'
+)?.get;
 const nativeElementAppendChild = Node.prototype.appendChild;
 const nativeEventPreventDefault = Event.prototype.preventDefault;
 const nativeEventStopImmediatePropagation = Event.prototype.stopImmediatePropagation;
@@ -115,6 +133,66 @@ interface NativePointerSequence {
 let activeNativePreviewFrame: HTMLIFrameElement | undefined;
 let nativeInputBridge: HTMLDivElement | undefined;
 let nativePointerSequence: NativePointerSequence | undefined;
+
+interface NativeFrameContentBounds {
+  readonly bottom: number;
+  readonly height: number;
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly width: number;
+}
+
+/**
+ * Map through the iframe's transformed content box, not its CSS border box.
+ * React Flow scales the entire artboard, while elementFromPoint in the preview
+ * consumes coordinates in the iframe viewport. Including even a one-pixel
+ * border at a small canvas zoom can move a hit from a child to its ancestor.
+ */
+function nativeFrameContentBounds(frame: HTMLIFrameElement): NativeFrameContentBounds | undefined {
+  if (
+    nativeFrameClientHeight === undefined ||
+    nativeFrameClientLeft === undefined ||
+    nativeFrameClientTop === undefined ||
+    nativeFrameClientWidth === undefined ||
+    nativeFrameOffsetHeight === undefined ||
+    nativeFrameOffsetWidth === undefined
+  )
+    return undefined;
+  const bounds = nativeFrameBounds.call(frame);
+  const clientHeight = Reflect.apply(nativeFrameClientHeight, frame, []) as number;
+  const clientLeft = Reflect.apply(nativeFrameClientLeft, frame, []) as number;
+  const clientTop = Reflect.apply(nativeFrameClientTop, frame, []) as number;
+  const clientWidth = Reflect.apply(nativeFrameClientWidth, frame, []) as number;
+  const offsetHeight = Reflect.apply(nativeFrameOffsetHeight, frame, []) as number;
+  const offsetWidth = Reflect.apply(nativeFrameOffsetWidth, frame, []) as number;
+  if (
+    !Number.isFinite(bounds.left) ||
+    !Number.isFinite(bounds.top) ||
+    !Number.isFinite(bounds.width) ||
+    !Number.isFinite(bounds.height) ||
+    !Number.isFinite(clientHeight) ||
+    !Number.isFinite(clientLeft) ||
+    !Number.isFinite(clientTop) ||
+    !Number.isFinite(clientWidth) ||
+    !Number.isFinite(offsetHeight) ||
+    !Number.isFinite(offsetWidth) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0 ||
+    clientWidth <= 0 ||
+    clientHeight <= 0 ||
+    offsetWidth <= 0 ||
+    offsetHeight <= 0
+  )
+    return undefined;
+  const scaleX = bounds.width / offsetWidth;
+  const scaleY = bounds.height / offsetHeight;
+  const left = bounds.left + clientLeft * scaleX;
+  const top = bounds.top + clientTop * scaleY;
+  const width = clientWidth * scaleX;
+  const height = clientHeight * scaleY;
+  return { bottom: top + height, height, left, right: left + width, top, width };
+}
 
 function setNativeInputBridgeState(state: string): void {
   nativeInputBridge?.setAttribute('data-selene-native-input-state', state);
@@ -172,12 +250,13 @@ function matchedNativePreviewFrame(event: PointerEvent): HTMLIFrameElement | und
   synchronizeNativeInputBridge();
   const frame = activeNativePreviewFrame;
   if (frame === undefined || nativeInputBridge === undefined) return undefined;
-  const bounds = nativeFrameBounds.call(frame);
+  const bounds = nativeFrameContentBounds(frame);
+  if (bounds === undefined) return undefined;
   if (
     event.clientX < bounds.left ||
-    event.clientX > bounds.left + bounds.width ||
+    event.clientX > bounds.right ||
     event.clientY < bounds.top ||
-    event.clientY > bounds.top + bounds.height
+    event.clientY > bounds.bottom
   )
     return undefined;
   const hit = nativeDocumentElementFromPoint(event.clientX, event.clientY);
@@ -198,7 +277,11 @@ nativeDocumentAddEventListener(
     if (frame === undefined) return;
     suppressNativeSequence(event);
     setNativeInputBridgeState('requesting');
-    const bounds = nativeFrameBounds.call(frame);
+    const bounds = nativeFrameContentBounds(frame);
+    if (bounds === undefined) {
+      setNativeInputBridgeState('rejected-point');
+      return;
+    }
     const x = (event.clientX - bounds.left) / bounds.width;
     const y = (event.clientY - bounds.top) / bounds.height;
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || x > 1 || y < 0 || y > 1) return;

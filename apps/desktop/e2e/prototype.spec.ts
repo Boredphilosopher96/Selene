@@ -2714,71 +2714,28 @@ test('stages the governed catalog and applies source-backed manual editor operat
         rootClickPoint
       );
       expect(rootClickHitStack[0]).toEqual({ bridge: true, tagName: 'DIV' });
-      const captureKey = '__seleneManualRootPointerEvidence';
-      await prototype.locator('html').evaluate((_documentRoot, key) => {
-        const captured: {
-          readonly button: number;
-          readonly isPrimary: boolean;
-          readonly isTrusted: boolean;
-          readonly type: string;
-        }[] = [];
-        const capture = (event: PointerEvent | MouseEvent) => {
-          if (captured.length < 8)
-            captured.push({
-              button: event.button,
-              isPrimary: event instanceof PointerEvent ? event.isPrimary : true,
-              isTrusted: event.isTrusted,
-              type: event.type
-            });
-        };
-        window.addEventListener('pointerdown', capture, true);
-        window.addEventListener('pointerup', capture, true);
-        (window as typeof window & Record<string, unknown>)[key] = {
-          captured,
-          dispose: () => {
-            window.removeEventListener('pointerdown', capture, true);
-            window.removeEventListener('pointerup', capture, true);
-          }
-        };
-      }, captureKey);
       await window.mouse.click(rootClickPoint.x, rootClickPoint.y);
       await expect
         .poll(() =>
-          prototype
-            .locator('html')
-            .evaluate((documentRoot) => documentRoot.dataset.seleneSelectionInteraction ?? null)
-        )
-        .toMatch(/^select-node:\d+$/);
-      const previewPointerEvidence = await prototype
-        .locator('html')
-        .evaluate((_documentRoot, key) => {
-          const state = (window as typeof window & Record<string, unknown>)[key] as
-            { readonly captured: unknown; readonly dispose: () => void } | undefined;
-          state?.dispose();
-          delete (window as typeof window & Record<string, unknown>)[key];
-          return state?.captured ?? [];
-        }, captureKey);
-      expect(previewPointerEvidence).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            button: 0,
-            isPrimary: true,
-            isTrusted: true,
-            type: 'pointerdown'
-          }),
-          expect.objectContaining({
-            button: 0,
-            isPrimary: true,
-            isTrusted: true,
-            type: 'pointerup'
+          window.evaluate(async () => {
+            const workspace = document.querySelector<HTMLElement>(
+              'main[aria-label="Selene desktop designer"]'
+            );
+            return {
+              bridgeState:
+                document
+                  .querySelector<HTMLElement>('[data-selene-native-input-bridge]')
+                  ?.getAttribute('data-selene-native-input-state') ?? null,
+              selectedNodeId: (await window.selene.designer.snapshot()).selectedNodeId ?? null,
+              selectionStage: workspace?.dataset.selenePreviewSelectionStage ?? null
+            };
           })
-        ])
-      );
-      await expect
-        .poll(() =>
-          window.evaluate(async () => (await window.selene.designer.snapshot()).selectedNodeId)
         )
-        .toBe('designer.root');
+        .toEqual({
+          bridgeState: 'posted',
+          selectedNodeId: 'designer.root',
+          selectionStage: 'authorized'
+        });
       const rootSelectionDiagnostic = await window.evaluate(
         async ({ frameIdentity, revisionId }) => {
           const snapshot = await window.selene.designer.snapshot();
