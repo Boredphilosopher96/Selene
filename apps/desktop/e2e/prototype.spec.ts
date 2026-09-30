@@ -3262,7 +3262,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     const toneFrame = await previewFrame.getAttribute('src');
     await componentProperties.getByLabel('Tone', { exact: true }).selectOption('primary');
     await componentProperties.getByRole('button', { name: 'Apply Tone', exact: true }).click();
-    await expect(componentProperties.getByRole('status')).toContainText(
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
       'Tone updated in the React artifact.'
     );
     await expect
@@ -3307,6 +3307,76 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(appearanceFrame);
+
+    const beforeRemoval = await window.evaluate(async () => window.selene.designer.snapshot());
+    const removedNodeId = await insertedButton.getAttribute('data-selene-node-id');
+    if (!removedNodeId) throw new Error('Inserted component has no stable source identity.');
+    const removePoint = await mapVisiblePreviewPoint(insertedButton, 'remove-catalog-button');
+    await window.mouse.click(removePoint.x, removePoint.y);
+    const removeButton = window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Remove', exact: true });
+    await expect(removeButton).toBeVisible();
+    window.once('dialog', (dialog) => dialog.dismiss());
+    await removeButton.click();
+    expect((await window.evaluate(async () => window.selene.designer.snapshot())).source).toEqual(
+      beforeRemoval.source
+    );
+    window.once('dialog', (dialog) => dialog.accept());
+    await removeButton.focus();
+    await removeButton.press('Enter');
+    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    const afterRemoval = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(afterRemoval.source.revision.id).not.toBe(beforeRemoval.source.revision.id);
+    expect(afterRemoval.source.nodes.map((node) => node.nodeId)).not.toContain(removedNodeId);
+    expect(afterRemoval.selectedNodeId).toBeUndefined();
+    expect(afterRemoval.designActivity.at(-1)).toMatchObject({
+      origin: 'manual',
+      kind: 'remove',
+      label: 'Removed React element',
+      status: 'applied'
+    });
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    const removalActivity = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="applied"]')
+      .filter({ hasText: 'Removed React element' });
+    await removalActivity.getByRole('button', { name: 'Undo manual change', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const next = await window.evaluate(async () => window.selene.designer.snapshot());
+        return next.designActivity.find((entry) => entry.kind === 'remove')?.status;
+      })
+      .toBe('undone');
+    const restored = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(restored.source.files).toEqual(beforeRemoval.source.files);
+    expect(restored.source.nodes).toEqual(beforeRemoval.source.nodes);
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    await window.reload();
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    const reopened = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(reopened.source.files).toEqual(beforeRemoval.source.files);
+    expect(reopened.source.nodes).toEqual(beforeRemoval.source.nodes);
+    expect(reopened.designActivity.find((entry) => entry.kind === 'remove')?.status).toBe('undone');
+    const evidencePath = test.info().outputPath('remove-undo-reload-evidence.json');
+    await writeFile(
+      evidencePath,
+      JSON.stringify(
+        {
+          removedNodeId,
+          beforeRevision: beforeRemoval.source.revision.id,
+          removalRevision: afterRemoval.source.revision.id,
+          undoRevision: restored.source.revision.id,
+          reopenedRevision: reopened.source.revision.id
+        },
+        null,
+        2
+      )
+    );
+    await test.info().attach('remove-undo-reload-evidence.json', {
+      path: evidencePath,
+      contentType: 'application/json'
+    });
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

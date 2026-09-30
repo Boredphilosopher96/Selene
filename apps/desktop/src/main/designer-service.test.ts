@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   enterpriseScenarioFixtures,
   migrateDesignRevisionV1,
@@ -1314,6 +1314,31 @@ describe('desktop designer application service', () => {
     expect(hostBindingState(reader).pendingReactBinding).toBeUndefined();
     expect(state.read()?.reactBinding).toEqual(binding);
   });
+  it('preserves the immutable manual revision when the same preview is activated again', async () => {
+    const state = fixtureProjectState();
+    const service = fixtureService({ projectState: state.port });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const artifact = buildArtifact(service.snapshot());
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-29T00:00:00Z'));
+    try {
+      await service.activateReactBindingReceipt(artifact);
+      const authority = state.read()?.manualReactEditAuthority;
+      expect(authority).toBeDefined();
+      now.mockReturnValue(Date.parse('2026-09-29T00:01:00Z'));
+      await service.activateReactBindingReceipt(artifact);
+      expect(state.read()?.manualReactEditAuthority).toEqual(authority);
+      const changedOutput = { ...artifact, code: `${artifact.code}\n// fresh compiler output` };
+      await service.activateReactBindingReceipt({
+        ...changedOutput,
+        receipt: { ...artifact.receipt!, outputSha256: digestReactBuildOutput(changedOutput) }
+      });
+      expect(state.read()?.manualReactEditAuthority?.designRevision.revisionCommitment).not.toBe(
+        authority?.designRevision.revisionCommitment
+      );
+    } finally {
+      now.mockRestore();
+    }
+  });
   it('rejects hostile receipt identities without mutating an inert binding', async () => {
     const state = fixtureProjectState();
     const seed = fixtureService({ projectState: state.port });
@@ -1698,21 +1723,6 @@ describe('desktop designer application service', () => {
   it('issues a capability only for the exact current mapped sole JSX text child', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(service);
-    const rootNodeId = 'source:orders-root';
-    const nestedWorkspace: ReactSourceWorkspace = {
-      ...workspace,
-      files: [
-        {
-          ...workspace.files[0]!,
-          content: `export default function App(){return <main data-selene-node-id="${rootNodeId}"><h1 data-selene-node-id="${nodeId}">Orders</h1></main>;}`
-        }
-      ],
-      nodes: [
-        ...workspace.nodes,
-        { nodeId: rootNodeId, path: 'src/App.tsx', exportName: 'default' }
-      ]
-    };
-    (service as unknown as { source: ReactSourceWorkspace }).source = nestedWorkspace;
     await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
       kind: 'available',
       nodeId,
@@ -2732,6 +2742,21 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
   it('binds destructive element removal to a single-use host capability', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(service);
+    const rootNodeId = 'source:orders-root';
+    const nestedWorkspace: ReactSourceWorkspace = {
+      ...workspace,
+      files: [
+        {
+          ...workspace.files[0]!,
+          content: `export default function App(){return <main data-selene-node-id="${rootNodeId}"><h1 data-selene-node-id="${nodeId}">Orders</h1></main>;}`
+        }
+      ],
+      nodes: [
+        ...workspace.nodes,
+        { nodeId: rootNodeId, path: 'src/App.tsx', exportName: 'default' }
+      ]
+    };
+    (service as unknown as { source: ReactSourceWorkspace }).source = nestedWorkspace;
     let evaluated: DesignEditProposal | undefined;
     (
       service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }

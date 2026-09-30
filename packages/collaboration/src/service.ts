@@ -1095,6 +1095,7 @@ export function createCollaborationService(
     if (!origin || options.allowedOrigins?.includes(origin) !== true) return response;
     const headers = new Headers(response.headers);
     headers.set('access-control-allow-origin', origin);
+    headers.set('access-control-allow-credentials', 'true');
     headers.set('vary', 'Origin');
     headers.set(
       'access-control-allow-headers',
@@ -2315,98 +2316,160 @@ export function createCollaborationService(
         await requireProjectAccess(request, eventStreamProjectId, 'viewer');
         const after = cursor(url.searchParams.get('after') ?? request.headers.get('last-event-id'));
         const encoder = new TextEncoder();
+        type Event = import('./index.js').CollaborationEvent;
         let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
         let lastCursor = after;
+        let replayCursor = after;
         let closed = false;
         let replaying = true;
-        const pending = new Map<number, import('./index.js').CollaborationEvent>();
+        let pumping = false;
+        let page: readonly Event[] = [];
+        let pageIndex = 0;
+        const pending = new Set<number>();
+        const replayAbort = new AbortController();
         let removeSubscriber = () => undefined;
         let removeAbortListener: () => void = () => undefined;
-        const deliver = (event: import('./index.js').CollaborationEvent) => {
-          if (closed || !controller || event.cursor <= lastCursor) return;
-          lastCursor = event.cursor;
+        const fail = (error: unknown) => {
+          removeSubscriber();
           try {
-            controller.enqueue(
-              encoder.encode(
-                `id: ${event.cursor}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`
-              )
-            );
+            controller?.error(isOwnedServiceError(error) ? error : serviceUnavailable());
           } catch {
-            removeSubscriber();
+            // Cancellation may have already closed the consumer.
           }
         };
-        const write = (event: import('./index.js').CollaborationEvent) => {
+        const nextPage = async (): Promise<readonly Event[]> => {
+          // A response outlives its request context. Each replay page gets its
+          // own supervised operation, disposed after that page or cancellation.
+          const replayContext = createHostContext({
+            signal: replayAbort.signal,
+            timeoutMs: maximumHostOperationMs
+          });
+          try {
+            return ownCollaborationValue(
+              await callCollaborationHostPort<readonly Event[]>(
+                replayContext,
+                options.repository,
+                'listEvents',
+                [eventStreamProjectId, replayCursor, 500]
+              )
+            );
+          } finally {
+            replayContext.dispose();
+          }
+        };
+        const pump = async () => {
+          if (pumping || closed || !controller) return;
+          pumping = true;
+          try {
+            while ((controller.desiredSize ?? 0) > 0) {
+              if (closed) return;
+              let event: Event | undefined;
+              if (pageIndex < page.length) {
+                event = page[pageIndex++];
+              } else if (replaying) {
+                const requiredCursor = pending.values().next().value;
+                // oxlint-disable-next-line no-await-in-loop -- durable pages depend on the preceding cursor.
+                const loaded = await nextPage();
+                if (closed) return;
+                if (
+                  loaded.length === 0 &&
+                  requiredCursor !== undefined &&
+                  requiredCursor > replayCursor
+                )
+                  throw new CollaborationError('INVALID', 'Committed event history is unavailable');
+                let nextCursor = replayCursor;
+                if (loaded.length > 500)
+                  throw new CollaborationError('INVALID', 'Event replay page is too large');
+                for (const candidate of loaded) {
+                  if (
+                    candidate.projectId !== eventStreamProjectId ||
+                    !Number.isSafeInteger(candidate.cursor) ||
+                    candidate.cursor <= nextCursor
+                  )
+                    throw new CollaborationError('INVALID', 'Event replay did not advance');
+                  nextCursor = candidate.cursor;
+                }
+                replayCursor = nextCursor;
+                page = loaded;
+                pageIndex = 0;
+                replaying = loaded.length === 500;
+                continue;
+              } else {
+                if (pending.size === 0) return;
+                replayCursor = lastCursor;
+                replaying = true;
+                continue;
+              }
+              if (!event || event.cursor <= lastCursor) continue;
+              controller.enqueue(
+                encoder.encode(
+                  `id: ${event.cursor}\nevent: change\ndata: ${JSON.stringify(event)}\n\n`
+                )
+              );
+              lastCursor = event.cursor;
+              pending.delete(event.cursor);
+            }
+          } catch (error) {
+            if (!closed) fail(error);
+          } finally {
+            pumping = false;
+          }
+        };
+        const write = (event: Event) => {
           if (closed || event.cursor <= lastCursor) return;
-          if (replaying) pending.set(event.cursor, event);
-          else deliver(event);
+          pending.add(event.cursor);
+          if (pending.size > collaborationBudgets.maxItems) {
+            // Disconnect instead of dropping data. EventSource reconnects from
+            // the last delivered durable cursor and replays the missing events.
+            fail(new CollaborationError('CONFLICT', 'Event stream consumer is too slow'));
+            return;
+          }
+          void pump();
         };
         const stream = new ReadableStream<Uint8Array>({
-          async start(value) {
+          start(value) {
             controller = value;
             const projectSubscribers = subscribers.get(eventStreamProjectId) ?? new Set();
             if (projectSubscribers.size >= collaborationBudgets.maxItems)
               throw new CollaborationError('CONFLICT', 'Event stream capacity is exhausted');
-
-            // Register the removal path before observing initial events. A hostile
-            // stream controller or signal implementation may throw synchronously;
-            // in that case the subscriber must not remain retained in the project
-            // fan-out set.
             removeSubscriber = () => {
               if (closed) return;
               closed = true;
               removeAbortListener();
               projectSubscribers.delete(write);
               if (projectSubscribers.size === 0) subscribers.delete(eventStreamProjectId);
+              pending.clear();
+              page = [];
+              replayAbort.abort();
             };
+            // Register before querying durable history so concurrent commits
+            // are buffered until the entire paginated replay has been consumed.
             projectSubscribers.add(write);
             subscribers.set(eventStreamProjectId, projectSubscribers);
-            const abort = () => removeSubscriber();
+            const abort = () => {
+              removeSubscriber();
+              try {
+                controller?.close();
+              } catch {
+                // Consumer cancellation may have already closed the stream.
+              }
+            };
             try {
               request.signal.addEventListener('abort', abort, { once: true });
               removeAbortListener = () => {
                 try {
                   request.signal.removeEventListener('abort', abort);
                 } catch {
-                  // Listener cleanup is best effort and must not escape a stream.
+                  // Listener cleanup must not escape a stream.
                 }
               };
-              // Subscribe before replaying persisted events. Otherwise a mutation
-              // committed between the list query and subscriber registration is
-              // permanently absent from this connection. Page the complete
-              // backlog as the events endpoint is intentionally capped at 500.
-              let replayCursor = after;
-              while (!closed) {
-                const page = await repository<readonly import('./index.js').CollaborationEvent[]>(
-                  request,
-                  'listEvents',
-                  [eventStreamProjectId, replayCursor, 500]
-                );
-                for (const event of page) deliver(event);
-                if (page.length < 500) break;
-                const nextCursor = page.at(-1)?.cursor;
-                if (nextCursor === undefined || nextCursor <= replayCursor)
-                  throw new CollaborationError('INVALID', 'Event replay did not advance');
-                replayCursor = nextCursor;
-              }
-              replaying = false;
-              for (const event of [...pending.values()].sort(
-                (left, right) => left.cursor - right.cursor
-              ))
-                deliver(event);
-              pending.clear();
+              if (request.signal.aborted) abort();
             } catch (error) {
               removeSubscriber();
-              try {
-                controller?.error(
-                  isOwnedServiceError(error)
-                    ? error
-                    : new CollaborationError('INVALID', 'Event stream could not be initialized')
-                );
-              } catch {
-                // The consumer may already have cancelled the errored stream.
-              }
+              throw error;
             }
           },
+          pull: pump,
           cancel() {
             removeSubscriber();
           }

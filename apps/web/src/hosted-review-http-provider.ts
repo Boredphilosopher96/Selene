@@ -25,7 +25,7 @@ export interface HostedReviewHttpProviderOptions {
 
 export interface ReviewEventSource {
   addEventListener(type: 'change', listener: (event: MessageEvent<string>) => void): void;
-  addEventListener(type: 'error', listener: () => void): void;
+  addEventListener(type: 'error' | 'open', listener: () => void): void;
   close(): void;
 }
 
@@ -567,15 +567,17 @@ export function createHostedReviewHttpProvider(
     },
     subscribe(binding, onChange, onError) {
       validateHostedReviewBinding(binding);
-      const createSource =
-        options.eventSource ??
-        ((url: string) => new EventSource(url, { withCredentials: true }) as ReviewEventSource);
+      const createSource: (url: string) => ReviewEventSource =
+        options.eventSource ?? ((url: string) => new EventSource(url, { withCredentials: true }));
       // Do not pin an `after` query value: native EventSource reconnects with
       // Last-Event-ID, and the service gives an explicit query parameter
       // precedence over that durable cursor.
       const url = api(`/v1/projects/${encodeURIComponent(binding.projectId)}/events/stream`);
       const source = createSource(url);
       let closed = false;
+      source.addEventListener('open', () => {
+        if (!closed) onChange();
+      });
       source.addEventListener('change', (event) => {
         if (closed) return;
         try {

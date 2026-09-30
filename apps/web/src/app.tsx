@@ -1605,19 +1605,6 @@ export function HostedReviewPortal({
         if (active) setProviderState('error');
       }
     );
-    void listHostedReviewThroughHost(context, provider, binding).then(
-      (loaded) => {
-        if (!active) return;
-        setThreads(loaded.map(reviewThreadView));
-      },
-      () => {
-        if (!active) return;
-        setProviderState('error');
-        setStorageError(
-          'The review provider could not be read. Existing review data was not changed.'
-        );
-      }
-    );
     return () => {
       active = false;
     };
@@ -1625,7 +1612,6 @@ export function HostedReviewPortal({
 
   useEffect(() => {
     const subscribe = provider.subscribe;
-    if (subscribe === undefined) return;
     let active = true;
     let refreshQueued = false;
     let refreshRunning = false;
@@ -1640,6 +1626,7 @@ export function HostedReviewPortal({
       do {
         refreshAgain = false;
         try {
+          // oxlint-disable-next-line no-await-in-loop -- serialize invalidation refreshes so older results cannot win.
           const loaded = await listHostedReviewThroughHost(context, provider, binding);
           if (!active) return;
           setThreads(loaded.map(reviewThreadView));
@@ -1652,7 +1639,7 @@ export function HostedReviewPortal({
             'Live review updates could not be refreshed. Reopen the review to retry.'
           );
         }
-      } while (active && refreshAgain);
+      } while (refreshAgain);
       refreshRunning = false;
     };
     const refresh = () => {
@@ -1663,12 +1650,18 @@ export function HostedReviewPortal({
         void reload();
       });
     };
-    const unsubscribe = subscribe.call(provider, binding, refresh, () => {
-      if (active) setProviderState('offline');
-    });
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = subscribe?.call(provider, binding, refresh, () => {
+        if (active) setProviderState('offline');
+      });
+    } catch {
+      setProviderState('offline');
+    }
+    void reload();
     return () => {
       active = false;
-      unsubscribe();
+      unsubscribe?.();
     };
   }, [binding, context, provider]);
 

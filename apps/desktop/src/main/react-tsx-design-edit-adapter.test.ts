@@ -470,6 +470,51 @@ describe('React TSX design edit preparation', () => {
     expect(prepared.patch.nextContent).toContain('// Keep this comment byte-identical.');
   });
 
+  it('rejects removal when the claimed parent differs from the actual source parent', () => {
+    const current = removeProposal();
+    const wrongParent = {
+      ...current,
+      commands: [
+        {
+          ...current.commands[0]!,
+          target: {
+            ...current.commands[0]!.target,
+            parentSourceAnchorId: 'orders.secondary'
+          }
+        }
+      ],
+      preconditions: current.preconditions.map((condition) =>
+        condition.kind === 'parent-is'
+          ? { ...condition, parentSourceAnchorId: 'orders.secondary' }
+          : condition
+      )
+    };
+    expect(prepareReactTsxDesignEdit(wrongParent, context())).toEqual({
+      kind: 'rejected',
+      code: 'UNSUPPORTED_CONTAINER'
+    });
+  });
+
+  it('records every mapped descendant removed with a JSX subtree', () => {
+    const nested = source.replace(
+      '>Orders</h1>',
+      '>Orders<span data-selene-node-id="orders.title-label">Label</span></h1>'
+    );
+    const current = context();
+    const prepared = prepareReactTsxDesignEdit(removeProposal(), {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: nested, language: 'tsx' }]
+      }
+    });
+    expect(prepared.kind).toBe('prepared');
+    if (prepared.kind !== 'prepared') throw new Error('Expected a prepared subtree removal.');
+    expect(prepared.patch.removedNodeIds).toEqual(['orders.title', 'orders.title-label']);
+    expect(prepared.patch.nextContent).not.toContain('orders.title');
+    expect(prepared.patch.nextContent).toContain('orders.summary');
+  });
+
   it('removes a self-closing mapped element without accepting an ambiguous marker', () => {
     const selfClosing = source.replace(
       '<h1 data-selene-node-id="orders.title">Orders</h1>',

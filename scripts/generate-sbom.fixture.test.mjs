@@ -2,7 +2,7 @@ import { createPackage } from '@electron/asar';
 import { describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -203,7 +203,7 @@ async function runGenerator(cwd, ...argumentsList) {
 }
 
 describe('packaged-runtime SBOM executable fixture', () => {
-  it('runs the real no-argument command and fails closed for invalid inputs and archive counts', async () => {
+  it('runs the real command and fails closed for missing platform resources, invalid inputs, and archive counts', async () => {
     const temporaryRoot = await mkdtemp(join(tmpdir(), 'selene-sbom-fixture-'));
     try {
       const source = join(temporaryRoot, 'source');
@@ -222,6 +222,7 @@ describe('packaged-runtime SBOM executable fixture', () => {
         `Selene-0.1.0-alpha.0-${hostPlatform}-${hostArch}.sbom.cdx.json`
       );
       await mkdir(join(temporaryRoot, 'scripts'), { recursive: true });
+      await symlink(join(root, 'node_modules'), join(temporaryRoot, 'node_modules'), 'junction');
       await mkdir(join(temporaryRoot, 'apps', 'desktop'), { recursive: true });
       await cp(
         join(root, 'scripts', 'generate-sbom.mjs'),
@@ -259,8 +260,28 @@ describe('packaged-runtime SBOM executable fixture', () => {
       await mkdir(join(resources, 'app.asar.unpacked', 'node_modules'), { recursive: true });
       await createPackage(source, join(resources, 'app.asar'));
 
-      const success = await runGenerator(temporaryRoot);
-      expect(success.code).toBe(0);
+      const defaultResult = await runGenerator(temporaryRoot);
+      if (hostPlatform === 'macos') {
+        // Synthetic resources have no attested Bun archive. The native default
+        // must reject them; exercise success with an explicit non-macOS target.
+        expect(defaultResult.code).not.toBe(0);
+        expect(defaultResult.stderr).toContain('bun/provenance.json');
+      }
+      const success =
+        hostPlatform === 'macos'
+          ? await runGenerator(
+              temporaryRoot,
+              '--platform',
+              'linux',
+              '--arch',
+              hostArch,
+              '--build-directory',
+              build,
+              '--output',
+              output
+            )
+          : defaultResult;
+      expect(success.code, success.stderr).toBe(0);
       expect(success.timedOut).toBe(false);
       expect(success.outputLimitExceeded).toBe(false);
       expect(success.stdout).toContain(output);

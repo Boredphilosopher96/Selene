@@ -211,6 +211,7 @@ jobs:
             apps/desktop/test-results/**/cockpit-designer-wide.png
             apps/desktop/test-results/**/cockpit-designer-compact-inspector.json
             apps/desktop/test-results/**/cockpit-designer-compact-inspector.png
+            apps/desktop/test-results/**/remove-undo-reload-evidence.json
             apps/desktop/test-results/**/attachments/screen-space-review-thread*
             apps/desktop/test-results/**/attachments/artifact-conversation-after-ai-mention*
             apps/desktop/test-results/**/attachments/compact-screen-space-review-thread*

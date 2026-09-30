@@ -679,12 +679,7 @@ export interface DesignerSnapshot {
         readonly description?: string;
       }[];
       readonly requiredCoverage?: readonly (
-        | 'loading'
-        | 'empty'
-        | 'error'
-        | 'disabled'
-        | 'responsive'
-        | 'accessibility'
+        'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
       )[];
       /** Compatible executable-prototype traceability only; never inferred from source paths. */
       readonly screenUsage?: readonly {
@@ -696,12 +691,7 @@ export interface DesignerSnapshot {
         readonly id: string;
         readonly exportName: string;
         readonly coverage: readonly (
-          | 'loading'
-          | 'empty'
-          | 'error'
-          | 'disabled'
-          | 'responsive'
-          | 'accessibility'
+          'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
         )[];
         readonly previewTicket?: StoryPreviewTicket;
       }[];
@@ -839,18 +829,13 @@ export interface DesignActivityEntry {
     | 'appearance'
     | 'position'
     | 'reorder'
-    | 'reparent';
+    | 'reparent'
+    | 'remove';
   readonly label: string;
   readonly actorLabel: string;
   readonly createdAt: string;
   readonly status:
-    | 'queued'
-    | 'running'
-    | 'reviewing'
-    | 'applied'
-    | 'failed'
-    | 'cancelled'
-    | 'undone';
+    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly referenceId: string;
   readonly resultingRevisionId?: string;
   readonly undo?: Readonly<{
@@ -876,10 +861,7 @@ export interface ManualTextEditCapability {
 export interface ManualTextEditUnavailable {
   readonly kind: 'unavailable';
   readonly code:
-    | 'PROJECT_MISMATCH'
-    | 'STALE_SELECTION'
-    | 'MAPPED_TEXT_UNAVAILABLE'
-    | 'MANUAL_EDIT_UNAVAILABLE';
+    'PROJECT_MISMATCH' | 'STALE_SELECTION' | 'MAPPED_TEXT_UNAVAILABLE' | 'MANUAL_EDIT_UNAVAILABLE';
 }
 
 export interface ManualTextEditCapabilityRequest {
@@ -1437,13 +1419,7 @@ export interface AIChangeRequest {
   readonly instruction: string;
   readonly target?: AIChangeHistoryTarget;
   readonly status:
-    | 'queued'
-    | 'running'
-    | 'reviewing'
-    | 'applied'
-    | 'failed'
-    | 'cancelled'
-    | 'undone';
+    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly createdAt: string;
   readonly resultingRevisionId?: string;
   readonly error?: string;

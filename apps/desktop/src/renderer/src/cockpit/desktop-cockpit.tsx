@@ -1614,12 +1614,13 @@ export function DesktopCockpit({
     readonly revisionId: string;
   }): Promise<Readonly<{ applied: boolean; message: string }>> => {
     const request = manualTextEditor.requestManualElementRemoveCapability;
-    const apply = manualTextEditor.applyManualElementRemove;
-    if (!request || !apply)
+    const removeApply = manualTextEditor.applyManualElementRemove;
+    if (!request || !removeApply)
       return { applied: false, message: 'Element removal is unavailable in this desktop host.' };
     if (
       canvasMode !== 'design' ||
       snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
       currentPreviewTelemetry?.nodeId !== input.nodeId
     )
       return { applied: false, message: 'The React selection changed. Select it again.' };
@@ -1634,7 +1635,7 @@ export function DesktopCockpit({
           applied: false,
           message: 'This element cannot be removed safely from React source.'
         };
-      const result = await apply({
+      const result = await removeApply({
         format: 'selene-desktop-manual-element-remove-apply/v1',
         projectId: snapshot.source.projectId,
         capabilityId: capability.capabilityId

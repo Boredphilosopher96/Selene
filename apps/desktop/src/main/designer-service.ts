@@ -1643,13 +1643,11 @@ export class DesktopDesignerApplicationService {
   private sequence = 0;
   private readonly publishOperations = new Map<string, PublishOperationState>();
   private designSystemCompilerActivation:
-    | { activate(artifactDigests: readonly string[]): void }
-    | undefined;
+    { activate(artifactDigests: readonly string[]): void } | undefined;
   /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
   private publishConsentRequestActive = false;
   private pendingPublishConsent:
-    | { readonly consentId: string; readonly digest: string; readonly expiresAt: number }
-    | undefined;
+    { readonly consentId: string; readonly digest: string; readonly expiresAt: number } | undefined;
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
@@ -3711,8 +3709,7 @@ export class DesktopDesignerApplicationService {
 
   /** Source-proven catalog target; computed preview CSS is never insertion authority. */
   private selectedCatalogInsertTarget():
-    | Readonly<{ nodeId: string; layout: 'flex' | 'grid' }>
-    | undefined {
+    Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined {
     if (this.selectedNodeId === undefined) return undefined;
     const context = this.manualMappedEditContext(this.selectedNodeId);
     if (context === undefined) return undefined;
@@ -4381,6 +4378,11 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError('Durable manual edit adoption is stale.');
     const previous = this.source;
     this.source = workspace;
+    if (
+      this.selectedNodeId !== undefined &&
+      !workspace.nodes.some((node) => node.nodeId === this.selectedNodeId)
+    )
+      this.selectedNodeId = undefined;
     this.baseline = this.manualEditBaseline(previous, workspace, commandKind);
     this.revokeReactBindingAuthority();
     this.pendingReactBinding = undefined;
@@ -5725,6 +5727,25 @@ export class DesktopDesignerApplicationService {
       .digest('hex');
     const commandLogDigest = createHash('sha256').update(serializeCanonicalData([])).digest('hex');
     const designSystemLockDigest = digest(this.designInputProvenance);
+    const compilerDigest = createHash('sha256').update(receipt.compilerIdentity).digest('hex');
+    const current = this.manualReactEditAuthority;
+    const revision = current?.designRevision;
+    // Refresh target evidence without replacing an unchanged immutable revision
+    // (including its command history, retention deadline, and undo commitment).
+    if (
+      current?.workspaceRevisionId === this.source.revision.id &&
+      revision?.projectId === this.source.projectId &&
+      revision.revisionId === this.source.revision.id &&
+      revision.tuple.sourceDigest === sourceDigest &&
+      revision.tuple.graphDigest === graphDigest &&
+      revision.tuple.bindingDigest === bindingDigest &&
+      revision.tuple.designSystemLockDigest === designSystemLockDigest &&
+      revision.tuple.preview.buildId === this.source.revision.id &&
+      revision.tuple.preview.previewDigest === receipt.outputSha256 &&
+      revision.tuple.compiler.compilerId === 'selene-vite-react-compiler-v1' &&
+      revision.tuple.compiler.compilerDigest === compilerDigest
+    )
+      return current;
     const createdAt = this.source.revision.createdAt;
     const retentionBase = Math.max(Date.now(), Date.parse(createdAt));
     if (!Number.isFinite(retentionBase))
@@ -5760,7 +5781,7 @@ export class DesktopDesignerApplicationService {
             compiler: {
               format: 'selene-compiler-identity/v1',
               compilerId: 'selene-vite-react-compiler-v1',
-              compilerDigest: createHash('sha256').update(receipt.compilerIdentity).digest('hex')
+              compilerDigest
             }
           },
           privacy: {
@@ -6147,6 +6168,7 @@ export class DesktopDesignerApplicationService {
         this.projectGeneration += 1;
         this.source = workspace;
         this.manualTextEditCapabilities.clear();
+        this.manualElementRemoveCapabilities.clear();
         this.manualLayoutEditCapabilities.clear();
         this.manualAppearanceEditCapabilities.clear();
         this.manualPositionEditCapabilities.clear();
@@ -6335,7 +6357,9 @@ export class DesktopDesignerApplicationService {
                   ? 'reorder'
                   : command?.kind === 'reparent-child'
                     ? 'reparent'
-                    : 'content';
+                    : command?.kind === 'remove-node'
+                      ? 'remove'
+                      : 'content';
         const label =
           kind === 'layout'
             ? 'Adjusted element layout'
@@ -6347,7 +6371,9 @@ export class DesktopDesignerApplicationService {
                   ? 'Reordered element'
                   : kind === 'reparent'
                     ? 'Moved element into another container'
-                    : 'Edited element text';
+                    : kind === 'remove'
+                      ? 'Removed React element'
+                      : 'Edited element text';
         const lifecycle = entry.lifecycle ?? 'applied';
         const current =
           latestManual === entry &&
@@ -7609,8 +7635,11 @@ export class DesktopDesignerApplicationService {
           let latestContent: ReactSourceWorkspace;
           let baseContent: ReactSourceWorkspace;
           try {
-            validateReactSourceWorkspace(latestCanonical.content as ReactSourceWorkspace);
-            validateReactSourceWorkspace(base.content as ReactSourceWorkspace);
+            // Retain the current host-approved dependency boundary while
+            // validating history; the restored source is compiled again below.
+            const policy = { allowedBareDependencies: this.source.dependencies };
+            validateReactSourceWorkspace(latestCanonical.content as ReactSourceWorkspace, policy);
+            validateReactSourceWorkspace(base.content as ReactSourceWorkspace, policy);
             latestContent = latestCanonical.content as ReactSourceWorkspace;
             baseContent = base.content as ReactSourceWorkspace;
           } catch {
@@ -7642,7 +7671,9 @@ export class DesktopDesignerApplicationService {
               summary: 'Undo latest manual design edit'
             })
           });
-          validateReactSourceWorkspace(restored);
+          validateReactSourceWorkspace(restored, {
+            allowedBareDependencies: this.source.dependencies
+          });
           const evidence = await this.manualEditTransaction.compileWorkspace?.(restored);
           if (evidence === undefined)
             throw new DesignerApplicationError(

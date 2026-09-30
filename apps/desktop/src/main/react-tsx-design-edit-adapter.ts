@@ -549,7 +549,9 @@ function samePositionTarget(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function directParent(element: ts.JsxElement): ts.JsxElement | undefined {
+function directParent(
+  element: ts.JsxElement | ts.JsxSelfClosingElement
+): ts.JsxElement | undefined {
   return ts.isJsxElement(element.parent) && element.parent.children.includes(element)
     ? element.parent
     : undefined;
@@ -987,6 +989,11 @@ export function prepareReactTsxDesignEdit(
     if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
     if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
     const element = elements[0]!;
+    const parentId = command.target.parentSourceAnchorId;
+    const parent = parentId === undefined ? undefined : elementForAnchor(scope, parentId);
+    if (parent === 'ambiguous') return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    if (parent === undefined || directParent(element) !== parent)
+      return { kind: 'rejected', code: 'UNSUPPORTED_CONTAINER' };
     const nextContent = `${file.content.slice(0, element.getStart(source))}${file.content.slice(element.end)}`;
     const reparsed = ts.createSourceFile(
       file.path,

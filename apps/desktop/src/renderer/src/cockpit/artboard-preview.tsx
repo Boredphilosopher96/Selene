@@ -292,8 +292,7 @@ export function ArtifactThreadCard({
     let frame = 0;
     let stableFrames = 0;
     let previous:
-      | Readonly<{ left: number; top: number; right: number; bottom: number }>
-      | undefined;
+      Readonly<{ left: number; top: number; right: number; bottom: number }> | undefined;
     setLayoutStable(false);
     const waitForStableCanvasPlacement = () => {
       const element = card.current;
@@ -1979,12 +1978,17 @@ export function ArtboardPreview({
                           onClick={async () => {
                             if (!selectedElement || !window.confirm('Remove this React element?'))
                               return;
+                            setStructureBusy(true);
                             setResizeStatus('Removing element…');
-                            const outcome = await onRemoveSelectedElement({
-                              nodeId: selectedElement.nodeId,
-                              revisionId: selectedElement.revisionId
-                            });
-                            setResizeStatus(outcome.message);
+                            try {
+                              const outcome = await onRemoveSelectedElement({
+                                nodeId: selectedElement.nodeId,
+                                revisionId: selectedElement.revisionId
+                              });
+                              setResizeStatus(outcome.message);
+                            } finally {
+                              setStructureBusy(false);
+                            }
                           }}
                         >
                           Remove

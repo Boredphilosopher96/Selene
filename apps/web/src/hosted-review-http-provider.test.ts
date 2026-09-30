@@ -177,10 +177,12 @@ test('subscribes to durable review events and closes the stream on disposal', ()
   expect(changes).toBe(1);
   listeners.get('error')?.();
   expect(errors).toBe(1);
+  listeners.get('open')?.();
+  expect(changes).toBe(2);
   dispose();
   expect(closed).toBe(true);
   listeners.get('change')?.({
     data: JSON.stringify({ projectId: binding.projectId, resourceType: 'review_thread' })
   } as MessageEvent<string>);
-  expect(changes).toBe(1);
+  expect(changes).toBe(2);
 });
