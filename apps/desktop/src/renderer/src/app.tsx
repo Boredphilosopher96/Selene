@@ -22,6 +22,7 @@ import {
   PreviewRefreshError,
   previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
+  retargetPreviewSelection,
   refreshPreviewRevision,
   samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
@@ -530,6 +531,7 @@ export function App() {
       currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
       const renderedInitialRuntime = initialRuntimeState(next);
+      const selectionEpoch = previewSelectionEpoch.current;
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
       try {
@@ -543,16 +545,17 @@ export function App() {
               ? { intent: 'presentation' as const }
               : {
                   intent: 'authoring' as const,
-                  retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
-                    const selectedNodeId = accepted.selectedNodeId;
-                    if (!selectedNodeId) return accepted;
-                    const retargeted = await enqueuePreviewSelectionHostOperation(() =>
-                      window.selene.designer.selectNode(selectedNodeId)
-                    );
-                    if (retargeted.source.revision.id !== revisionId)
-                      throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
-                    return retargeted;
-                  }
+                  retarget: (accepted: DesignerSnapshot, revisionId: string) =>
+                    retargetPreviewSelection({
+                      snapshot: accepted,
+                      revisionId,
+                      isCurrent: () =>
+                        selectionEpoch === previewSelectionEpoch.current &&
+                        !previewSelectionSuppressed.current,
+                      enqueue: enqueuePreviewSelectionHostOperation,
+                      readSnapshot: window.selene.designer.snapshot,
+                      selectNode: window.selene.designer.selectNode
+                    })
                 },
           signal: controller.signal
         });
@@ -577,7 +580,7 @@ export function App() {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
     },
-    [compile, presentPreviewBuild]
+    [compile, presentPreviewBuild, enqueuePreviewSelectionHostOperation]
   );
   const previewAIProposal = useCallback(
     async (input: AIProposalDecisionInput): Promise<void> => {

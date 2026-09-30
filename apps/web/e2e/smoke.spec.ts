@@ -52,6 +52,10 @@ test('presents a hosted Orders review portal with a runnable prototype and purpo
 
   const portal = reviewPortal(page);
   await expect(portal.getByRole('heading', { name: 'Orders', exact: true })).toBeVisible();
+  await expect(portal.getByLabel('Hosted review provider status')).toHaveAttribute(
+    'data-sync',
+    'offline'
+  );
   await test.info().attach('hosted-orders-review-portal', {
     body: await portal.screenshot(),
     contentType: 'image/png'

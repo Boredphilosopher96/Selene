@@ -35,7 +35,7 @@
     "vite": "8.1.5"
   },
   "devDependencies": {
-    "electron": "43.2.0",
+    "electron": "43.5.0",
     "electron-vite": "5.0.0"
   }
 }

@@ -1593,24 +1593,6 @@ export function HostedReviewPortal({
   };
 
   useEffect(() => {
-    let active = true;
-    void stateHostedReviewThroughHost(context, provider, binding).then(
-      (state) => {
-        if (active) {
-          setProviderInfo(state);
-          setProviderState(state.sync);
-        }
-      },
-      () => {
-        if (active) setProviderState('error');
-      }
-    );
-    return () => {
-      active = false;
-    };
-  }, [binding, context, provider]);
-
-  useEffect(() => {
     const subscribe = provider.subscribe;
     let active = true;
     let refreshQueued = false;
@@ -1627,10 +1609,14 @@ export function HostedReviewPortal({
         refreshAgain = false;
         try {
           // oxlint-disable-next-line no-await-in-loop -- serialize invalidation refreshes so older results cannot win.
-          const loaded = await listHostedReviewThroughHost(context, provider, binding);
+          const [state, loaded] = await Promise.all([
+            stateHostedReviewThroughHost(context, provider, binding),
+            listHostedReviewThroughHost(context, provider, binding)
+          ]);
           if (!active) return;
           setThreads(loaded.map(reviewThreadView));
-          setProviderState('idle');
+          setProviderInfo(state);
+          setProviderState(state.sync);
           setStorageError(undefined);
         } catch {
           if (!active) return;

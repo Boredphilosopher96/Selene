@@ -6,8 +6,10 @@ import {
   PreviewRefreshError,
   previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
+  retargetPreviewSelection,
   refreshPreviewRevision,
   type ProjectRevisionSnapshot,
+  type RevisionSnapshot,
   type PreviewPresentationClock,
   type PreviewPresentationReceipt
 } from './preview-refresh';
@@ -35,7 +37,10 @@ class FakeClock implements PreviewPresentationClock {
   }
 }
 
-const snapshot = { source: { revision: { id: 'orders-r2' } }, selectedNodeId: 'orders.table' };
+const snapshot: RevisionSnapshot & { readonly selectedNodeId?: string } = {
+  source: { revision: { id: 'orders-r2' } },
+  selectedNodeId: 'orders.table'
+};
 const identity = (revisionId: string, nonce = `nonce-${revisionId}`, url = `preview:${nonce}`) => ({
   revisionId,
   nonce,
@@ -224,6 +229,65 @@ describe('preview presentation coordinator', () => {
 });
 
 describe('preview refresh receipt coordination', () => {
+  it('does not restore a selection cleared while compilation was pending', async () => {
+    const calls: string[] = [];
+    let epoch = 0;
+    const startingEpoch = epoch;
+    const cleared = { source: snapshot.source };
+    const result = await refreshPreviewRevision({
+      snapshot,
+      compile: async () => {
+        epoch += 1;
+        calls.push('escape-cleared');
+        await Promise.resolve();
+        return { revisionId: 'orders-r2' };
+      },
+      present: async () => receipt,
+      selection: {
+        intent: 'authoring',
+        retarget: (accepted, revisionId) =>
+          retargetPreviewSelection({
+            snapshot: accepted,
+            revisionId,
+            isCurrent: () => epoch === startingEpoch,
+            enqueue: async (operation) => operation(),
+            readSnapshot: async () => {
+              calls.push('read-current-selection');
+              return cleared;
+            },
+            selectNode: async (nodeId) => {
+              calls.push(`select:${nodeId}`);
+              return accepted;
+            }
+          })
+      }
+    });
+    expect(result.snapshot).toEqual({ source: snapshot.source });
+    expect(calls).toEqual(['escape-cleared', 'read-current-selection']);
+  });
+
+  it('checks selection intent when the host queue executes, after an earlier clear', async () => {
+    const calls: string[] = [];
+    let current = true;
+    const result = await retargetPreviewSelection({
+      snapshot,
+      revisionId: 'orders-r2',
+      isCurrent: () => current,
+      enqueue: async (operation) => {
+        current = false;
+        calls.push('queued-clear');
+        return operation();
+      },
+      readSnapshot: async () => ({ source: snapshot.source }),
+      selectNode: async (nodeId) => {
+        calls.push(`select:${nodeId}`);
+        return snapshot;
+      }
+    });
+    expect(result).toEqual({ source: snapshot.source });
+    expect(calls).toEqual(['queued-clear']);
+  });
+
   it('orders compile, exact visible receipt, then selection retarget before success', async () => {
     const calls: string[] = [];
     const result = await refreshPreviewRevision({
