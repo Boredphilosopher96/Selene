@@ -36,6 +36,8 @@ import type {
   ManualLayoutEditCapabilityRequest,
   ManualTextEditApplyRequest,
   ManualTextEditCapabilityRequest,
+  ManualElementRemoveApplyRequest,
+  ManualElementRemoveCapabilityRequest,
   RecentProject,
   ProjectOpenResult,
   PreviewBuildResult,
@@ -579,6 +581,18 @@ contextBridge.exposeInMainWorld('selene', {
       >,
     applyManualTextEdit: (input: ManualTextEditApplyRequest) =>
       ipcRenderer.invoke('selene:designer:apply-manual-text-edit', input) as Promise<
+        import('@selene/core').DesignEditResult
+      >,
+    requestManualElementRemoveCapability: (input: ManualElementRemoveCapabilityRequest) =>
+      ipcRenderer.invoke(
+        'selene:designer:request-manual-element-remove-capability',
+        input
+      ) as Promise<
+        | import('../shared/designer-api').ManualElementRemoveCapability
+        | import('../shared/designer-api').ManualElementRemoveUnavailable
+      >,
+    applyManualElementRemove: (input: ManualElementRemoveApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-manual-element-remove', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
     requestManualLayoutEditCapability: (input: ManualLayoutEditCapabilityRequest) =>

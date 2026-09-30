@@ -39,6 +39,10 @@ import type {
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
   ManualTextEditUnavailable,
+  ManualElementRemoveApplyRequest,
+  ManualElementRemoveCapability,
+  ManualElementRemoveCapabilityRequest,
+  ManualElementRemoveUnavailable,
   SpatialTargetInput
 } from '../../../shared/designer-api';
 import type { DesignEditResult } from '@selene/core';
@@ -85,6 +89,10 @@ export interface ManualTextEditorPort {
     input: ManualTextEditCapabilityRequest
   ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
   applyManualTextEdit(input: ManualTextEditApplyRequest): Promise<DesignEditResult>;
+  requestManualElementRemoveCapability?(
+    input: ManualElementRemoveCapabilityRequest
+  ): Promise<ManualElementRemoveCapability | ManualElementRemoveUnavailable>;
+  applyManualElementRemove?(input: ManualElementRemoveApplyRequest): Promise<DesignEditResult>;
   requestManualLayoutEditCapability(
     input: ManualLayoutEditCapabilityRequest
   ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;

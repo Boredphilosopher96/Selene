@@ -1609,6 +1609,54 @@ export function DesktopCockpit({
       };
     }
   };
+  const removeSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    const request = manualTextEditor.requestManualElementRemoveCapability;
+    const apply = manualTextEditor.applyManualElementRemove;
+    if (!request || !apply)
+      return { applied: false, message: 'Element removal is unavailable in this desktop host.' };
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.nodeId !== input.nodeId
+    )
+      return { applied: false, message: 'The React selection changed. Select it again.' };
+    try {
+      const capability = await request({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message: 'This element cannot be removed safely from React source.'
+        };
+      const result = await apply({
+        format: 'selene-desktop-manual-element-remove-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Element was not removed: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        };
+      const next = await manualTextEditor.snapshot();
+      onSnapshot(next);
+      onPreviewSelectionClear();
+      await onRender(next);
+      setManualEditStatus('Element removed from React source.');
+      return { applied: true, message: 'Element removed from React source.' };
+    } catch {
+      return {
+        applied: false,
+        message: 'Element removal could not finish. Refresh and try again.'
+      };
+    }
+  };
   const insertDesignSystemComponent = async (
     entry: CatalogInsertEntry,
     props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
@@ -1994,6 +2042,7 @@ export function DesktopCockpit({
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
               onSelectedElementContextAction={actOnMappedElement}
+              onRemoveSelectedElement={removeSelectedElement}
               onCreateArtifactThread={createArtifactThread}
               onBeginSelectedElementTextEdit={beginSelectedElementTextEdit}
               onUpdateSelectedElementText={updateSelectedElementText}

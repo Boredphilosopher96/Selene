@@ -104,6 +104,10 @@ export interface ArtifactDirectManipulationProps {
     readonly capabilityId: string;
     readonly content: string;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onRemoveSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
   readonly onResizeSelectedElement: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -288,7 +292,8 @@ export function ArtifactThreadCard({
     let frame = 0;
     let stableFrames = 0;
     let previous:
-      Readonly<{ left: number; top: number; right: number; bottom: number }> | undefined;
+      | Readonly<{ left: number; top: number; right: number; bottom: number }>
+      | undefined;
     setLayoutStable(false);
     const waitForStableCanvasPlacement = () => {
       const element = card.current;
@@ -534,6 +539,7 @@ export function ArtboardPreview({
   onNavigateThread,
   selectedElement,
   onSelectedElementContextAction,
+  onRemoveSelectedElement,
   onCreateArtifactThread,
   onClearElementSelection,
   onBeginSelectedElementTextEdit,
@@ -1960,6 +1966,28 @@ export function ArtboardPreview({
                           }}
                         >
                           {textEditSession ? 'Close text' : 'Edit text'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy ||
+                            layoutBusy !== undefined ||
+                            resizeBusy !== undefined ||
+                            moveBusy ||
+                            structureBusy
+                          }
+                          onClick={async () => {
+                            if (!selectedElement || !window.confirm('Remove this React element?'))
+                              return;
+                            setResizeStatus('Removing element…');
+                            const outcome = await onRemoveSelectedElement({
+                              nodeId: selectedElement.nodeId,
+                              revisionId: selectedElement.revisionId
+                            });
+                            setResizeStatus(outcome.message);
+                          }}
+                        >
+                          Remove
                         </button>
                       </div>
                       {textEditSession ? (

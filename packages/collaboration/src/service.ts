@@ -2314,25 +2314,16 @@ export function createCollaborationService(
       if (request.method === 'GET' && eventStreamProjectId) {
         await requireProjectAccess(request, eventStreamProjectId, 'viewer');
         const after = cursor(url.searchParams.get('after') ?? request.headers.get('last-event-id'));
-        const initial = await repository<readonly import('./index.js').CollaborationEvent[]>(
-          request,
-          'listEvents',
-          [eventStreamProjectId, after, 500]
-        );
         const encoder = new TextEncoder();
         let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
         let lastCursor = after;
         let closed = false;
+        let replaying = true;
+        const pending = new Map<number, import('./index.js').CollaborationEvent>();
         let removeSubscriber = () => undefined;
         let removeAbortListener: () => void = () => undefined;
-        const write = (event: import('./index.js').CollaborationEvent) => {
-          if (
-            closed ||
-            !controller ||
-            event.cursor <= lastCursor ||
-            (controller.desiredSize !== null && controller.desiredSize <= 0)
-          )
-            return;
+        const deliver = (event: import('./index.js').CollaborationEvent) => {
+          if (closed || !controller || event.cursor <= lastCursor) return;
           lastCursor = event.cursor;
           try {
             controller.enqueue(
@@ -2344,8 +2335,13 @@ export function createCollaborationService(
             removeSubscriber();
           }
         };
+        const write = (event: import('./index.js').CollaborationEvent) => {
+          if (closed || event.cursor <= lastCursor) return;
+          if (replaying) pending.set(event.cursor, event);
+          else deliver(event);
+        };
         const stream = new ReadableStream<Uint8Array>({
-          start(value) {
+          async start(value) {
             controller = value;
             const projectSubscribers = subscribers.get(eventStreamProjectId) ?? new Set();
             if (projectSubscribers.size >= collaborationBudgets.maxItems)
@@ -2374,11 +2370,41 @@ export function createCollaborationService(
                   // Listener cleanup is best effort and must not escape a stream.
                 }
               };
-              for (const event of initial) write(event);
+              // Subscribe before replaying persisted events. Otherwise a mutation
+              // committed between the list query and subscriber registration is
+              // permanently absent from this connection. Page the complete
+              // backlog as the events endpoint is intentionally capped at 500.
+              let replayCursor = after;
+              while (!closed) {
+                const page = await repository<readonly import('./index.js').CollaborationEvent[]>(
+                  request,
+                  'listEvents',
+                  [eventStreamProjectId, replayCursor, 500]
+                );
+                for (const event of page) deliver(event);
+                if (page.length < 500) break;
+                const nextCursor = page.at(-1)?.cursor;
+                if (nextCursor === undefined || nextCursor <= replayCursor)
+                  throw new CollaborationError('INVALID', 'Event replay did not advance');
+                replayCursor = nextCursor;
+              }
+              replaying = false;
+              for (const event of [...pending.values()].sort(
+                (left, right) => left.cursor - right.cursor
+              ))
+                deliver(event);
+              pending.clear();
             } catch (error) {
               removeSubscriber();
-              if (isOwnedServiceError(error)) throw error;
-              throw new CollaborationError('INVALID', 'Event stream could not be initialized');
+              try {
+                controller?.error(
+                  isOwnedServiceError(error)
+                    ? error
+                    : new CollaborationError('INVALID', 'Event stream could not be initialized')
+                );
+              } catch {
+                // The consumer may already have cancelled the errored stream.
+              }
             }
           },
           cancel() {

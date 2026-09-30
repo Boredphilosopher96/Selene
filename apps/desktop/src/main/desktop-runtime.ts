@@ -980,6 +980,12 @@ function createWindow(): void {
   designerHandler('selene:designer:apply-manual-text-edit', (value) =>
     desktopDesigner.applyManualTextEdit(value)
   );
+  designerHandler('selene:designer:request-manual-element-remove-capability', (value) =>
+    desktopDesigner.requestManualElementRemoveCapability(value)
+  );
+  designerHandler('selene:designer:apply-manual-element-remove', (value) =>
+    desktopDesigner.applyManualElementRemove(value)
+  );
   designerHandler('selene:designer:request-manual-layout-edit-capability', (value) =>
     desktopDesigner.requestManualLayoutEditCapability(value)
   );

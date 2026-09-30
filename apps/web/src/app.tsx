@@ -1624,6 +1624,55 @@ export function HostedReviewPortal({
   }, [binding, context, provider]);
 
   useEffect(() => {
+    const subscribe = provider.subscribe;
+    if (subscribe === undefined) return;
+    let active = true;
+    let refreshQueued = false;
+    let refreshRunning = false;
+    let refreshAgain = false;
+    const reload = async () => {
+      if (!active) return;
+      if (refreshRunning) {
+        refreshAgain = true;
+        return;
+      }
+      refreshRunning = true;
+      do {
+        refreshAgain = false;
+        try {
+          const loaded = await listHostedReviewThroughHost(context, provider, binding);
+          if (!active) return;
+          setThreads(loaded.map(reviewThreadView));
+          setProviderState('idle');
+          setStorageError(undefined);
+        } catch {
+          if (!active) return;
+          setProviderState('error');
+          setStorageError(
+            'Live review updates could not be refreshed. Reopen the review to retry.'
+          );
+        }
+      } while (active && refreshAgain);
+      refreshRunning = false;
+    };
+    const refresh = () => {
+      if (!active || refreshQueued) return;
+      refreshQueued = true;
+      queueMicrotask(() => {
+        refreshQueued = false;
+        void reload();
+      });
+    };
+    const unsubscribe = subscribe.call(provider, binding, refresh, () => {
+      if (active) setProviderState('offline');
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [binding, context, provider]);
+
+  useEffect(() => {
     let active = true;
     void verifyPublishedInspectionManifest(
       ordersReviewInspectionEnvelope,

@@ -304,6 +304,30 @@ const reorderProposal = () => {
   };
 };
 
+const removeProposal = () => {
+  const current = proposal();
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'remove-node',
+        target: {
+          ...current.commands[0]!.target,
+          parentSourceAnchorId: 'orders.root'
+        }
+      }
+    ],
+    preconditions: [
+      ...current.preconditions,
+      {
+        kind: 'parent-is',
+        sourceAnchorId: 'orders.title',
+        parentSourceAnchorId: 'orders.root'
+      }
+    ]
+  };
+};
+
 const reparentProposal = () => {
   const current = proposal();
   const target = {
@@ -432,6 +456,50 @@ describe('React TSX design edit preparation', () => {
     expect(result.patch.previousContent).toBe(source);
     expect(result.patch.nextContent).toBe(source.replace('>Orders</h1>', '>Open orders</h1>'));
     expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
+  });
+
+  it('removes exactly one compiler-bound React element and records its stable identity', () => {
+    const prepared = prepareReactTsxDesignEdit(removeProposal(), context());
+    expect(prepared.kind).toBe('prepared');
+    if (prepared.kind !== 'prepared') throw new Error('Expected a prepared element removal.');
+    expect(prepared.patch.removedNodeIds).toEqual(['orders.title']);
+    expect(prepared.patch.nextContent).not.toContain('<h1');
+    expect(prepared.patch.nextContent).toContain(
+      '<main data-selene-node-id="orders.root" style={{ display: \'flex\' }}><section'
+    );
+    expect(prepared.patch.nextContent).toContain('// Keep this comment byte-identical.');
+  });
+
+  it('removes a self-closing mapped element without accepting an ambiguous marker', () => {
+    const selfClosing = source.replace(
+      '<h1 data-selene-node-id="orders.title">Orders</h1>',
+      '<OrderTitle data-selene-node-id="orders.title" />'
+    );
+    const current = context();
+    const prepared = prepareReactTsxDesignEdit(removeProposal(), {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: selfClosing, language: 'tsx' }]
+      }
+    });
+    expect(prepared.kind).toBe('prepared');
+    if (prepared.kind !== 'prepared') throw new Error('Expected a self-closing element removal.');
+    expect(prepared.patch.nextContent).not.toContain('<OrderTitle');
+
+    const ambiguous = selfClosing.replace(
+      '</main>',
+      '<OrderTitle data-selene-node-id="orders.title" /></main>'
+    );
+    expect(
+      prepareReactTsxDesignEdit(removeProposal(), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content: ambiguous, language: 'tsx' }]
+        }
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_TARGET' });
   });
 
   it('inserts only an exact host-approved package component with a fresh stable marker', () => {

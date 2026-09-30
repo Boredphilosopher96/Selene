@@ -53,6 +53,10 @@ import type {
   ManualTextEditApplyRequest,
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
+  ManualElementRemoveApplyRequest,
+  ManualElementRemoveCapability,
+  ManualElementRemoveCapabilityRequest,
+  ManualElementRemoveUnavailable,
   ManualTextEditUnavailable
 } from '../../shared/designer-api';
 import type {
@@ -163,6 +167,12 @@ declare global {
         ): Promise<ManualTextEditCapability | ManualTextEditUnavailable>;
         applyManualTextEdit(
           input: ManualTextEditApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestManualElementRemoveCapability(
+          input: ManualElementRemoveCapabilityRequest
+        ): Promise<ManualElementRemoveCapability | ManualElementRemoveUnavailable>;
+        applyManualElementRemove(
+          input: ManualElementRemoveApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
         requestManualLayoutEditCapability(
           input: ManualLayoutEditCapabilityRequest

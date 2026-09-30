@@ -28,6 +28,8 @@ export interface PreparedReactTsxDesignEdit {
       readonly path: string;
       readonly exportName: string;
     };
+    /** Stable compiler identities removed with a structural source subtree. */
+    readonly removedNodeIds?: readonly string[];
   };
 }
 
@@ -190,6 +192,24 @@ function markerCount(root: ts.Node, anchor: string): number {
   };
   visit(root);
   return count;
+}
+
+function markedNodeIds(root: ts.Node): readonly string[] {
+  const ids: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const attributes =
+      ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)
+        ? node.attributes.properties
+        : undefined;
+    for (const attribute of attributes ?? []) {
+      if (!ts.isJsxAttribute(attribute)) continue;
+      const value = markerValue(attribute);
+      if (value !== undefined) ids.push(value);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return Object.freeze([...new Set(ids)].sort());
 }
 
 function escapedJsxText(content: string): string {
@@ -853,6 +873,7 @@ export function prepareReactTsxDesignEdit(
       command.kind !== 'set-style' &&
       command.kind !== 'replace-component' &&
       command.kind !== 'insert-child' &&
+      command.kind !== 'remove-node' &&
       command.kind !== 'reorder-child' &&
       command.kind !== 'reparent-child')
   )
@@ -958,6 +979,31 @@ export function prepareReactTsxDesignEdit(
         path: file.path,
         previousContent: file.content,
         nextContent: prepared
+      }
+    };
+  }
+  if (command.kind === 'remove-node') {
+    const elements = matchingReplaceableElements(scope, command.target.sourceAnchorId);
+    if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+    if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    const element = elements[0]!;
+    const nextContent = `${file.content.slice(0, element.getStart(source))}${file.content.slice(element.end)}`;
+    const reparsed = ts.createSourceFile(
+      file.path,
+      nextContent,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: file.path,
+        previousContent: file.content,
+        nextContent,
+        removedNodeIds: markedNodeIds(element)
       }
     };
   }

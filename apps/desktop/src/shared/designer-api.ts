@@ -679,7 +679,12 @@ export interface DesignerSnapshot {
         readonly description?: string;
       }[];
       readonly requiredCoverage?: readonly (
-        'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+        | 'loading'
+        | 'empty'
+        | 'error'
+        | 'disabled'
+        | 'responsive'
+        | 'accessibility'
       )[];
       /** Compatible executable-prototype traceability only; never inferred from source paths. */
       readonly screenUsage?: readonly {
@@ -691,7 +696,12 @@ export interface DesignerSnapshot {
         readonly id: string;
         readonly exportName: string;
         readonly coverage: readonly (
-          'loading' | 'empty' | 'error' | 'disabled' | 'responsive' | 'accessibility'
+          | 'loading'
+          | 'empty'
+          | 'error'
+          | 'disabled'
+          | 'responsive'
+          | 'accessibility'
         )[];
         readonly previewTicket?: StoryPreviewTicket;
       }[];
@@ -823,12 +833,24 @@ export interface DesignActivityEntry {
   readonly id: string;
   readonly origin: 'manual' | 'agent';
   readonly kind:
-    'ai-change' | 'content' | 'layout' | 'appearance' | 'position' | 'reorder' | 'reparent';
+    | 'ai-change'
+    | 'content'
+    | 'layout'
+    | 'appearance'
+    | 'position'
+    | 'reorder'
+    | 'reparent';
   readonly label: string;
   readonly actorLabel: string;
   readonly createdAt: string;
   readonly status:
-    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
+    | 'queued'
+    | 'running'
+    | 'reviewing'
+    | 'applied'
+    | 'failed'
+    | 'cancelled'
+    | 'undone';
   readonly referenceId: string;
   readonly resultingRevisionId?: string;
   readonly undo?: Readonly<{
@@ -854,7 +876,10 @@ export interface ManualTextEditCapability {
 export interface ManualTextEditUnavailable {
   readonly kind: 'unavailable';
   readonly code:
-    'PROJECT_MISMATCH' | 'STALE_SELECTION' | 'MAPPED_TEXT_UNAVAILABLE' | 'MANUAL_EDIT_UNAVAILABLE';
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_TEXT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
 }
 
 export interface ManualTextEditCapabilityRequest {
@@ -869,6 +894,33 @@ export interface ManualTextEditApplyRequest {
   readonly projectId: string;
   readonly capabilityId: string;
   readonly content: string;
+}
+
+/** A short-lived host grant to remove one compiler-authenticated JSX subtree. */
+export interface ManualElementRemoveCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly expiresAt: string;
+}
+
+export interface ManualElementRemoveUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_ELEMENT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export type ManualElementRemoveCapabilityRequest = ManualTextEditCapabilityRequest;
+
+/** Renderer confirms only the opaque, exact removal grant; source identity stays in main. */
+export interface ManualElementRemoveApplyRequest {
+  readonly format: 'selene-desktop-manual-element-remove-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
 }
 
 export const MANUAL_LAYOUT_PROPERTIES = [
@@ -1385,7 +1437,13 @@ export interface AIChangeRequest {
   readonly instruction: string;
   readonly target?: AIChangeHistoryTarget;
   readonly status:
-    'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
+    | 'queued'
+    | 'running'
+    | 'reviewing'
+    | 'applied'
+    | 'failed'
+    | 'cancelled'
+    | 'undone';
   readonly createdAt: string;
   readonly resultingRevisionId?: string;
   readonly error?: string;

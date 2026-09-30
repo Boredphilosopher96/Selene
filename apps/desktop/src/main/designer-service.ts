@@ -82,6 +82,8 @@ import {
   type ManualStructureEditUnavailable,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
+  type ManualElementRemoveCapability,
+  type ManualElementRemoveUnavailable,
   type ManualDesignUndoInput,
   type AIProposalDecisionInput,
   type DesignActivityEntry,
@@ -1641,11 +1643,13 @@ export class DesktopDesignerApplicationService {
   private sequence = 0;
   private readonly publishOperations = new Map<string, PublishOperationState>();
   private designSystemCompilerActivation:
-    { activate(artifactDigests: readonly string[]): void } | undefined;
+    | { activate(artifactDigests: readonly string[]): void }
+    | undefined;
   /** One native-consent/start sequence survives renderer panel unmounts and duplicate IPC calls. */
   private publishConsentRequestActive = false;
   private pendingPublishConsent:
-    { readonly consentId: string; readonly digest: string; readonly expiresAt: number } | undefined;
+    | { readonly consentId: string; readonly digest: string; readonly expiresAt: number }
+    | undefined;
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
@@ -1767,6 +1771,18 @@ export class DesktopDesignerApplicationService {
       consumedEdit?: string;
     }
   >();
+  /** Single-use grants bind destructive edits to the selected immutable revision. */
+  private readonly manualElementRemoveCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumed?: boolean;
+    }
+  >();
   /** Untrusted persisted data until source, graph, and freshly issued host evidence agree. */
   private pendingReactBinding: ReactBindingManifest | undefined;
   /** A migrated collaboration snapshot is persisted only after host binding revalidation. */
@@ -1871,6 +1887,61 @@ export class DesktopDesignerApplicationService {
       });
       if (proposal.base.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
       return this.evaluateManualProposal(proposal, 'set-content');
+    });
+  }
+
+  public async requestManualElementRemoveCapability(
+    value: unknown
+  ): Promise<ManualElementRemoveCapability | ManualElementRemoveUnavailable> {
+    const unavailable = (
+      code: ManualElementRemoveUnavailable['code']
+    ): ManualElementRemoveUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_ELEMENT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      const proposal = this.manualElementRemoveProposal(input.nodeId);
+      if (proposal === undefined) return unavailable('MAPPED_ELEMENT_UNAVAILABLE');
+      const capabilityId = `manual-remove-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualElementRemoveCapabilities.set(capabilityId, {
+        projectId: input.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId,
+        expiresAt,
+        proposal
+      });
+      this.pruneManualElementRemoveCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  public async applyManualElementRemove(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.manualElementRemoveApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneManualElementRemoveCapabilities();
+      const capability = this.manualElementRemoveCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (capability.consumed) return rejected('CAPABILITY_CONSUMED');
+      if (capability.revisionId !== this.source.revision.id) return rejected('STALE_SELECTION');
+      capability.consumed = true;
+      return this.evaluateManualProposal(capability.proposal, 'remove-node');
     });
   }
 
@@ -2725,6 +2796,21 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private manualElementRemoveApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['format', 'projectId', 'capabilityId']);
+    if (input?.format !== 'selene-desktop-manual-element-remove-apply/v1') return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private designSystemComponentInsertCapabilityRequest(value: unknown):
     | Readonly<{
         projectId: string;
@@ -3001,6 +3087,77 @@ export class DesktopDesignerApplicationService {
     };
     try {
       return Object.freeze({ proposal: parseDesignEditProposal(proposal), currentContent });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualElementRemoveProposal(nodeId: string): DesignEditProposal | undefined {
+    const context = this.manualMappedEditContext(nodeId);
+    if (context === undefined) return undefined;
+    const { revision, operationTarget, element } = context;
+    const parent = ts.isJsxElement(element.parent) ? element.parent : undefined;
+    if (parent === undefined || !parent.children.includes(element)) return undefined;
+    const parentMarkers = parent.openingElement.attributes.properties.flatMap((attribute) => {
+      if (
+        !ts.isJsxAttribute(attribute) ||
+        !ts.isIdentifier(attribute.name) ||
+        attribute.name.text !== 'data-selene-node-id' ||
+        attribute.initializer === undefined
+      )
+        return [];
+      if (ts.isStringLiteral(attribute.initializer)) return [attribute.initializer.text];
+      const expression = ts.isJsxExpression(attribute.initializer)
+        ? attribute.initializer.expression
+        : undefined;
+      return expression !== undefined && ts.isStringLiteral(expression) ? [expression.text] : [];
+    });
+    if (parentMarkers.length !== 1 || parentMarkers[0] === undefined) return undefined;
+    const parentSourceAnchorId = parentMarkers[0];
+    const commandId = `manual-remove-command-${randomUUID()}`;
+    try {
+      return parseDesignEditProposal({
+        format: 'selene-design-edit-proposal/v1',
+        schemaVersion: 1,
+        proposalId: `manual-remove-proposal-${randomUUID()}`,
+        commandId,
+        actorId: this.collaborationAuthorId,
+        origin: 'manual-canvas',
+        operation: {
+          format: 'selene-design-revision-operation-reference/v2',
+          kind: 'edit',
+          tenantId: revision.tenantId,
+          projectId: revision.projectId,
+          actorId: this.collaborationAuthorId,
+          commandId,
+          revisionId: revision.revisionId,
+          tupleBinding: revision.tupleBinding,
+          revisionCommitment: revision.revisionCommitment
+        },
+        base: revision,
+        commands: [
+          {
+            kind: 'remove-node',
+            target: {
+              format: 'selene-design-edit-target/v1',
+              operation: operationTarget,
+              sourceAnchorId: nodeId,
+              parentSourceAnchorId
+            }
+          }
+        ],
+        preconditions: [
+          { kind: 'source-revision', sourceDigest: revision.tuple.sourceDigest },
+          { kind: 'binding-revision', bindingDigest: revision.tuple.bindingDigest },
+          {
+            kind: 'design-system-lock',
+            designSystemLockDigest: revision.tuple.designSystemLockDigest
+          },
+          { kind: 'node-exists', sourceAnchorId: nodeId },
+          { kind: 'parent-is', sourceAnchorId: nodeId, parentSourceAnchorId }
+        ],
+        requestedAt: new Date().toISOString()
+      });
     } catch {
       return undefined;
     }
@@ -3554,7 +3711,8 @@ export class DesktopDesignerApplicationService {
 
   /** Source-proven catalog target; computed preview CSS is never insertion authority. */
   private selectedCatalogInsertTarget():
-    Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined {
+    | Readonly<{ nodeId: string; layout: 'flex' | 'grid' }>
+    | undefined {
     if (this.selectedNodeId === undefined) return undefined;
     const context = this.manualMappedEditContext(this.selectedNodeId);
     if (context === undefined) return undefined;
@@ -4062,6 +4220,13 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private pruneManualElementRemoveCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualElementRemoveCapabilities) {
+      if (capability.expiresAt <= now) this.manualElementRemoveCapabilities.delete(id);
+    }
+  }
+
   private pruneManualLayoutEditCapabilities(): void {
     const now = Date.now();
     for (const [id, capability] of this.manualLayoutEditCapabilities) {
@@ -4146,9 +4311,11 @@ export class DesktopDesignerApplicationService {
                       ? 'Compiled and validated a semantic canvas structure edit.'
                       : commandKind === 'insert-child'
                         ? 'Compiled and validated an approved catalog component insertion.'
-                        : commandKind === 'replace-component'
-                          ? 'Compiled and validated an approved catalog component replacement.'
-                          : 'Compiled and validated a direct canvas text edit.'
+                        : commandKind === 'remove-node'
+                          ? 'Compiled and validated a source-backed element removal.'
+                          : commandKind === 'replace-component'
+                            ? 'Compiled and validated an approved catalog component replacement.'
+                            : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -4312,6 +4479,7 @@ export class DesktopDesignerApplicationService {
           proposal.commands.length === 1 &&
           (command?.kind === 'insert-child' ||
             command?.kind === 'replace-component' ||
+            command?.kind === 'remove-node' ||
             command?.kind === 'reorder-child' ||
             command?.kind === 'reparent-child');
         if (

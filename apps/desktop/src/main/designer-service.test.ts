@@ -1698,6 +1698,21 @@ describe('desktop designer application service', () => {
   it('issues a capability only for the exact current mapped sole JSX text child', async () => {
     const service = fixtureService();
     const { workspace, nodeId } = textCapabilityFixture(service);
+    const rootNodeId = 'source:orders-root';
+    const nestedWorkspace: ReactSourceWorkspace = {
+      ...workspace,
+      files: [
+        {
+          ...workspace.files[0]!,
+          content: `export default function App(){return <main data-selene-node-id="${rootNodeId}"><h1 data-selene-node-id="${nodeId}">Orders</h1></main>;}`
+        }
+      ],
+      nodes: [
+        ...workspace.nodes,
+        { nodeId: rootNodeId, path: 'src/App.tsx', exportName: 'default' }
+      ]
+    };
+    (service as unknown as { source: ReactSourceWorkspace }).source = nestedWorkspace;
     await expect(capabilityRequest(service, nodeId, workspace.revision.id)).resolves.toMatchObject({
       kind: 'available',
       nodeId,
@@ -2712,6 +2727,61 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       diagnostics: [{ code: 'CAPABILITY_CONSUMED' }]
     });
     expect(durableWrites).toBe(1);
+  });
+
+  it('binds destructive element removal to a single-use host capability', async () => {
+    const service = fixtureService();
+    const { workspace, nodeId } = textCapabilityFixture(service);
+    let evaluated: DesignEditProposal | undefined;
+    (
+      service as unknown as { manualEditTransaction: ManualReactEditTransactionPort }
+    ).manualEditTransaction = {
+      async evaluate(proposal) {
+        evaluated = proposal;
+        return {
+          format: 'selene-design-edit-result/v1',
+          kind: 'rejected',
+          diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+        };
+      }
+    };
+    const capability = await service.requestManualElementRemoveCapability({
+      projectId: workspace.projectId,
+      nodeId,
+      revisionId: workspace.revision.id
+    });
+    expect(capability).toMatchObject({
+      kind: 'available',
+      nodeId,
+      revisionId: workspace.revision.id
+    });
+    if (capability.kind !== 'available') throw new Error('removal capability was not issued');
+    const request = {
+      format: 'selene-desktop-manual-element-remove-apply/v1' as const,
+      projectId: workspace.projectId,
+      capabilityId: capability.capabilityId
+    };
+    await expect(service.applyManualElementRemove(request)).resolves.toMatchObject({
+      diagnostics: [{ code: 'FIXTURE_REJECTION' }]
+    });
+    expect(evaluated?.commands).toMatchObject([
+      { kind: 'remove-node', target: { sourceAnchorId: nodeId, parentSourceAnchorId: rootNodeId } }
+    ]);
+    expect(evaluated?.preconditions).toContainEqual({
+      kind: 'parent-is',
+      sourceAnchorId: nodeId,
+      parentSourceAnchorId: rootNodeId
+    });
+    await expect(service.applyManualElementRemove(request)).resolves.toMatchObject({
+      diagnostics: [{ code: 'CAPABILITY_CONSUMED' }]
+    });
+    await expect(
+      service.requestManualElementRemoveCapability({
+        projectId: workspace.projectId,
+        nodeId,
+        revisionId: 'stale-revision'
+      })
+    ).resolves.toEqual({ kind: 'unavailable', code: 'STALE_SELECTION' });
   });
 
   it('rejects expired and stale grants without evaluating a transaction and clears grants on project switch', async () => {
