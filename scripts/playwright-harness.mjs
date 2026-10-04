@@ -46,6 +46,23 @@ export function isHostedCi(environment = process.env) {
   );
 }
 
+export function assertNativeElectronTestAllowed({
+  platform = process.platform,
+  environment = process.env
+} = {}) {
+  if (
+    platform !== 'darwin' ||
+    isHostedCi(environment) ||
+    environment.SELENE_ALLOW_FOREGROUND_ELECTRON_TESTS === 'true'
+  )
+    return;
+  throw new Error(
+    'Foreground Electron tests are disabled on local macOS because they activate application windows. ' +
+      'Run these graphical tests in CI. Local foreground verification requires explicit human authorization; ' +
+      'see docs/quality/native-electron-verification.md. Test listing and --smoke-test remain available.'
+  );
+}
+
 /** Stable, filesystem-safe identifier used in logs and isolated Electron user-data paths. */
 export function harnessIdentity(worktree = process.cwd()) {
   return createHash('sha256').update(worktree).digest('hex').slice(0, 10);

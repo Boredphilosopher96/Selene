@@ -7,7 +7,14 @@ export type DesignReadiness = 'draft' | 'ready-for-review' | 'ready-for-handoff'
 export type BaselineIntent = 'review' | 'handoff';
 export type BaselineCurrency = 'current' | 'stale' | 'none';
 export type DesignChangeKind =
-  'source' | 'design-system' | 'token' | 'template' | 'dependency' | 'visual';
+  | 'source'
+  | 'design-system'
+  | 'token'
+  | 'template'
+  | 'dependency'
+  | 'visual'
+  | 'flow'
+  | 'direction';
 
 /** Stable public error for hostile values at the portable baseline boundary. */
 export class DesignBaselineError extends Error {

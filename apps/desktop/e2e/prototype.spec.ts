@@ -6,7 +6,12 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
+import {
+  assertNativeElectronTestAllowed,
+  harnessIdentity
+} from '../../../scripts/playwright-harness.mjs';
+
+test.beforeAll(() => assertNativeElectronTestAllowed());
 
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
@@ -22,6 +27,7 @@ function desktopArgs(userData: string): string[] {
 }
 
 async function electronExecutable(): Promise<string> {
+  assertNativeElectronTestAllowed();
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
@@ -3322,10 +3328,30 @@ test('stages the governed catalog and applies source-backed manual editor operat
     expect((await window.evaluate(async () => window.selene.designer.snapshot())).source).toEqual(
       beforeRemoval.source
     );
+    // Fault only presentation after the real source transaction commits.
+    await application.evaluate(({ ipcMain }) => {
+      const handlers: unknown = Reflect.get(ipcMain, '_invokeHandlers');
+      if (!(handlers instanceof Map))
+        throw new Error('Electron invoke handler registry unavailable');
+      const original: unknown = handlers.get('selene:preview-build');
+      if (typeof original !== 'function') throw new Error('Canonical preview handler unavailable');
+      ipcMain.removeHandler('selene:preview-build');
+      ipcMain.handle('selene:preview-build', () => {
+        ipcMain.removeHandler('selene:preview-build');
+        ipcMain.handle('selene:preview-build', (...args) => Reflect.apply(original, ipcMain, args));
+        throw new Error('Native removal presentation failure');
+      });
+      return true;
+    });
     window.once('dialog', (dialog) => dialog.accept());
     await removeButton.focus();
     await removeButton.press('Enter');
-    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      'Element removed from React source. The preview could not refresh'
+    );
+    await expect(
+      window.getByRole('toolbar', { name: 'Selected React element actions' })
+    ).toHaveCount(0);
     const afterRemoval = await window.evaluate(async () => window.selene.designer.snapshot());
     expect(afterRemoval.source.revision.id).not.toBe(beforeRemoval.source.revision.id);
     expect(afterRemoval.source.nodes.map((node) => node.nodeId)).not.toContain(removedNodeId);
@@ -3336,6 +3362,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
       label: 'Removed React element',
       status: 'applied'
     });
+    await window.reload();
+    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    const removalReload = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(removalReload.source.files).toEqual(afterRemoval.source.files);
+    expect(removalReload.selectedNodeId).toBeUndefined();
     await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
     const removalActivity = window
       .getByLabel('AI conversation history')
@@ -3358,6 +3389,25 @@ test('stages the governed catalog and applies source-backed manual editor operat
     expect(reopened.source.files).toEqual(beforeRemoval.source.files);
     expect(reopened.source.nodes).toEqual(beforeRemoval.source.nodes);
     expect(reopened.designActivity.find((entry) => entry.kind === 'remove')?.status).toBe('undone');
+    const reopenedRemoval = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="undone"]')
+      .filter({ hasText: 'Removed React element' });
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    await reopenedRemoval.getByRole('button', { name: 'Redo manual change', exact: true }).click();
+    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    const redone = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(redone.source.files).toEqual(afterRemoval.source.files);
+    expect(redone.selectedNodeId).toBeUndefined();
+    await window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="applied"]')
+      .filter({ hasText: 'Removed React element' })
+      .getByRole('button', { name: 'Undo manual change', exact: true })
+      .click();
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    const secondUndo = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(secondUndo.source.files).toEqual(beforeRemoval.source.files);
     const evidencePath = test.info().outputPath('remove-undo-reload-evidence.json');
     await writeFile(
       evidencePath,
@@ -3366,8 +3416,12 @@ test('stages the governed catalog and applies source-backed manual editor operat
           removedNodeId,
           beforeRevision: beforeRemoval.source.revision.id,
           removalRevision: afterRemoval.source.revision.id,
+          removalReloadRevision: removalReload.source.revision.id,
+          previewFailure: true,
           undoRevision: restored.source.revision.id,
-          reopenedRevision: reopened.source.revision.id
+          reopenedRevision: reopened.source.revision.id,
+          redoRevision: redone.source.revision.id,
+          secondUndoRevision: secondUndo.source.revision.id
         },
         null,
         2

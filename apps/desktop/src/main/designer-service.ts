@@ -82,6 +82,8 @@ import {
   type ManualStructureEditUnavailable,
   type ManualTextEditCapability,
   type ManualTextEditUnavailable,
+  type ManualElementDuplicateCapability,
+  type ManualElementDuplicateUnavailable,
   type ManualElementRemoveCapability,
   type ManualElementRemoveUnavailable,
   type ManualDesignUndoInput,
@@ -124,6 +126,10 @@ import {
 import type { AuthenticatedArtifactElementTarget } from './authenticated-artifact-target';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import type { DesktopDesignSystemIntake } from './designer-setup-host';
+import { projectPendingAIProposal } from './ai-proposal-review';
+import { sourceDesignInputUsage } from './source-design-input-usage';
+import { inspectReactTsxDuplicateTarget } from './react-tsx-design-edit-adapter';
+import { manualReactEditHistoryHead } from './project-lifecycle';
 import type {
   LocalDesignerState,
   LocalProductHandoffProject,
@@ -1651,14 +1657,17 @@ export class DesktopDesignerApplicationService {
   private graph = editablePrototype;
   private graphMode: 'edit' | 'run' = 'edit';
   private graphRevision = 0;
+  private pendingPersistedGraph: LocalDesignerState['prototypeGraph'];
   /** Never sent to preload/renderer; persisted manifest remains inert until host revalidates it. */
   private reactBinding: ReactBindingManifest | undefined;
+  private lastActivatedBuildArtifact: ReactBuildArtifact | undefined;
   /** Fresh host compiler evidence for a new workspace; never persisted across a reopen. */
   private compilerTargetEvidence: ReactBindingCompilerEvidence | undefined;
   /** Host-only immutable manual-edit authority; never included in DesignerSnapshot. */
   private manualReactEditAuthority: LocalManualReactEditAuthority | undefined;
   /** Digest-only, lifecycle-owned manual edit replay records. */
   private manualReactEditJournal: readonly LocalManualReactEditJournalEntry[] | undefined;
+  private archivedManualReactEditJournal: readonly LocalManualReactEditJournalEntry[] = [];
   /** Sole host-owned agent candidate awaiting an explicit designer decision. */
   private pendingAIProposal: LocalPendingAIProposal | undefined;
   /** Short-lived, one-purpose selection receipts; the bound compiler target never crosses IPC. */
@@ -1771,6 +1780,17 @@ export class DesktopDesignerApplicationService {
   >();
   /** Single-use grants bind destructive edits to the selected immutable revision. */
   private readonly manualElementRemoveCapabilities = new Map<
+    string,
+    {
+      readonly projectId: string;
+      readonly nodeId: string;
+      readonly revisionId: string;
+      readonly expiresAt: number;
+      readonly proposal: DesignEditProposal;
+      consumed?: boolean;
+    }
+  >();
+  private readonly manualElementDuplicateCapabilities = new Map<
     string,
     {
       readonly projectId: string;
@@ -1940,6 +1960,62 @@ export class DesktopDesignerApplicationService {
       if (capability.revisionId !== this.source.revision.id) return rejected('STALE_SELECTION');
       capability.consumed = true;
       return this.evaluateManualProposal(capability.proposal, 'remove-node');
+    });
+  }
+
+  public async requestManualElementDuplicateCapability(
+    value: unknown
+  ): Promise<ManualElementDuplicateCapability | ManualElementDuplicateUnavailable> {
+    const unavailable = (
+      code: ManualElementDuplicateUnavailable['code']
+    ): ManualElementDuplicateUnavailable => ({ kind: 'unavailable', code });
+    const input = this.manualTextCapabilityRequest(value);
+    if (input === undefined) return unavailable('MAPPED_ELEMENT_UNAVAILABLE');
+    if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+    if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+    return this.enqueueGraphOperation(async () => {
+      if (input.revisionId !== this.source.revision.id) return unavailable('STALE_SELECTION');
+      if (input.projectId !== this.source.projectId) return unavailable('PROJECT_MISMATCH');
+      const proposal = this.manualElementDuplicateProposal(input.nodeId);
+      if (proposal === undefined) return unavailable('MAPPED_ELEMENT_UNAVAILABLE');
+      const capabilityId = `manual-duplicate-${randomUUID()}`;
+      const expiresAt = Date.now() + 5 * 60_000;
+      this.manualElementDuplicateCapabilities.set(capabilityId, {
+        projectId: input.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId,
+        expiresAt,
+        proposal
+      });
+      this.pruneManualElementDuplicateCapabilities();
+      return Object.freeze({
+        kind: 'available' as const,
+        capabilityId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId,
+        expiresAt: new Date(expiresAt).toISOString()
+      });
+    });
+  }
+
+  public async applyManualElementDuplicate(value: unknown): Promise<DesignEditResult> {
+    const rejected = (code: string): DesignEditResult => ({
+      format: 'selene-design-edit-result/v1',
+      kind: 'rejected',
+      diagnostics: [{ code }]
+    });
+    const input = this.manualElementDuplicateApplyRequest(value);
+    if (input === undefined) return rejected('INVALID_REQUEST');
+    if (input.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+    return this.enqueueGraphOperation(async () => {
+      this.pruneManualElementDuplicateCapabilities();
+      const capability = this.manualElementDuplicateCapabilities.get(input.capabilityId);
+      if (capability === undefined) return rejected('CAPABILITY_UNAVAILABLE');
+      if (capability.projectId !== this.source.projectId) return rejected('PROJECT_MISMATCH');
+      if (capability.consumed) return rejected('CAPABILITY_CONSUMED');
+      if (capability.revisionId !== this.source.revision.id) return rejected('STALE_SELECTION');
+      capability.consumed = true;
+      return this.evaluateManualProposal(capability.proposal, 'duplicate-node');
     });
   }
 
@@ -2809,6 +2885,21 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private manualElementDuplicateApplyRequest(
+    value: unknown
+  ): Readonly<{ projectId: string; capabilityId: string }> | undefined {
+    const input = this.manualTextRequestRecord(value, ['format', 'projectId', 'capabilityId']);
+    if (input?.format !== 'selene-desktop-manual-element-duplicate-apply/v1') return undefined;
+    try {
+      return Object.freeze({
+        projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
+        capabilityId: validateDesignerIdentifier(input.capabilityId, 'capabilityId')
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
   private designSystemComponentInsertCapabilityRequest(value: unknown):
     | Readonly<{
         projectId: string;
@@ -3155,6 +3246,33 @@ export class DesktopDesignerApplicationService {
           { kind: 'parent-is', sourceAnchorId: nodeId, parentSourceAnchorId }
         ],
         requestedAt: new Date().toISOString()
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  private manualElementDuplicateProposal(nodeId: string): DesignEditProposal | undefined {
+    const removal = this.manualElementRemoveProposal(nodeId);
+    const inspection = inspectReactTsxDuplicateTarget(this.source, nodeId);
+    const command = removal?.commands[0];
+    if (removal === undefined || inspection.kind !== 'supported' || command?.kind !== 'remove-node')
+      return undefined;
+    const sourceAnchorRemaps = inspection.sourceAnchorIds.map((fromSourceAnchorId) => ({
+      fromSourceAnchorId,
+      toSourceAnchorId: `duplicate-${randomUUID()}`
+    }));
+    try {
+      return parseDesignEditProposal({
+        ...removal,
+        commands: [{ kind: 'duplicate-node', target: command.target, sourceAnchorRemaps }],
+        preconditions: [
+          ...removal.preconditions,
+          { kind: 'node-exists', sourceAnchorId: inspection.parentSourceAnchorId },
+          ...inspection.sourceAnchorIds
+            .filter((anchor) => anchor !== nodeId)
+            .map((sourceAnchorId) => ({ kind: 'node-exists', sourceAnchorId }))
+        ]
       });
     } catch {
       return undefined;
@@ -4224,6 +4342,13 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private pruneManualElementDuplicateCapabilities(): void {
+    const now = Date.now();
+    for (const [id, capability] of this.manualElementDuplicateCapabilities) {
+      if (capability.expiresAt <= now) this.manualElementDuplicateCapabilities.delete(id);
+    }
+  }
+
   private pruneManualLayoutEditCapabilities(): void {
     const now = Date.now();
     for (const [id, capability] of this.manualLayoutEditCapabilities) {
@@ -4310,9 +4435,11 @@ export class DesktopDesignerApplicationService {
                         ? 'Compiled and validated an approved catalog component insertion.'
                         : commandKind === 'remove-node'
                           ? 'Compiled and validated a source-backed element removal.'
-                          : commandKind === 'replace-component'
-                            ? 'Compiled and validated an approved catalog component replacement.'
-                            : 'Compiled and validated a direct canvas text edit.'
+                          : commandKind === 'duplicate-node'
+                            ? 'Compiled and validated a source-backed element duplication.'
+                            : commandKind === 'replace-component'
+                              ? 'Compiled and validated an approved catalog component replacement.'
+                              : 'Compiled and validated a direct canvas text edit.'
           }
         ],
         provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
@@ -4482,6 +4609,7 @@ export class DesktopDesignerApplicationService {
           (command?.kind === 'insert-child' ||
             command?.kind === 'replace-component' ||
             command?.kind === 'remove-node' ||
+            command?.kind === 'duplicate-node' ||
             command?.kind === 'reorder-child' ||
             command?.kind === 'reparent-child');
         if (
@@ -4565,7 +4693,14 @@ export class DesktopDesignerApplicationService {
           inverse
         });
         const journal = Object.freeze(
-          [...(this.manualReactEditJournal ?? []), journalEntry].slice(-32)
+          [
+            ...(this.manualReactEditJournal ?? []).map((entry) =>
+              entry.lifecycle === 'undone'
+                ? Object.freeze({ ...entry, lifecycle: 'abandoned' as const })
+                : entry
+            ),
+            journalEntry
+          ].slice(-32)
         );
         const collaboration = {
           ...this.collaboration,
@@ -4595,6 +4730,10 @@ export class DesktopDesignerApplicationService {
           ...this.guidanceState(),
           baseline,
           collaborationSnapshot: serializeSnapshot(collaboration),
+          prototypeGraph: { revision: this.graphRevision, graph: this.graph },
+          ...(this.archivedManualReactEditJournal.length === 0
+            ? {}
+            : { archivedManualReactEditJournal: this.archivedManualReactEditJournal }),
           manualReactEditAuthority: Object.freeze({
             format: 'selene-local-manual-react-edit-authority/v1',
             workspaceRevisionId: candidateWorkspace.revision.id,
@@ -4968,8 +5107,95 @@ export class DesktopDesignerApplicationService {
     }
   }
 
+  private requireDesignInputsMutable(): void {
+    if (this.active !== undefined || this.pendingAIProposal !== undefined)
+      throw new DesignerApplicationError('Finish the AI change before updating design inputs.');
+  }
+
+  private metadataDesignBaseline(
+    kind: 'design-system' | 'direction',
+    before: unknown,
+    current: unknown,
+    reason: string
+  ): DesignBaselineState {
+    const beforeDigest = digest(before);
+    const currentDigest = digest(current);
+    if (beforeDigest === currentDigest) return this.baseline;
+    return executeDesignBaselineCommand(this.baseline, {
+      type: 'apply-design-mutation',
+      change: {
+        id: `design-${kind}-${randomUUID()}`,
+        kind,
+        beforeRevision: { id: `${kind}:${beforeDigest}`, fingerprint: beforeDigest },
+        currentRevision: { id: `${kind}:${currentDigest}`, fingerprint: currentDigest },
+        affected: {
+          projectId: this.source.projectId,
+          screenIds: ['desktop-designer'],
+          routePaths: ['/'],
+          scenarioIds: this.currentCollaborationScenarioIds(),
+          componentIds: [],
+          stableNodeIds: this.source.nodes.map((node) => node.nodeId)
+        },
+        evidence: [{ description: reason }],
+        provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
+        occurredAt: new Date().toISOString(),
+        reason
+      }
+    });
+  }
+
+  private async withDesignInputMutation<T>(
+    previous: typeof this.designInputProvenance,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const activeInputs = (value: typeof this.designInputProvenance) => ({
+      systems: (
+        value.designSystems ??
+        (value.designSystem === undefined
+          ? []
+          : [{ id: value.designSystem.artifactDigest, enabled: true }])
+      )
+        .filter((input) => input.enabled)
+        .map((input) => input.id),
+      languages: (
+        value.designLanguages ??
+        (value.designLanguage === undefined
+          ? []
+          : [{ id: value.designLanguage.artifactDigest, enabled: true }])
+      )
+        .filter((input) => input.enabled)
+        .map((input) => input.id)
+    });
+    const before = activeInputs(previous);
+    const current = activeInputs(this.designInputProvenance);
+    const baseline = this.metadataDesignBaseline(
+      'design-system',
+      before,
+      current,
+      'Updated the enabled design-system or language guidance and its precedence.'
+    );
+    const semanticChange = digest(before) !== digest(current);
+    const captured = this.captureMutationState();
+    try {
+      this.replaceCollaboration({
+        ...this.collaboration,
+        designReviewState: toCollaborationDesignReviewState(baseline)
+      });
+      if (semanticChange) {
+        this.revokeReactBindingAuthority();
+        this.revokeManualReactEditAuthority();
+        this.pendingReactBinding = undefined;
+      }
+      return await operation();
+    } catch (error) {
+      this.restoreMutationState(captured);
+      throw error;
+    }
+  }
+
   public inspectDesignSystem(value: unknown): Promise<DesignSystemIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
+      this.requireDesignInputsMutable();
       const receipt = await this.setupIntake.inspectPackage(value);
       const existing =
         this.designInputProvenance.designSystems ??
@@ -5010,7 +5236,7 @@ export class DesktopDesignerApplicationService {
           : { designLanguages: this.designInputProvenance.designLanguages })
       };
       try {
-        await this.persistProjectState();
+        await this.withDesignInputMutation(previous, () => this.persistProjectState());
       } catch (error) {
         this.designInputProvenance = previous;
         this.designSystemCompilerActivation?.activate(
@@ -5023,6 +5249,7 @@ export class DesktopDesignerApplicationService {
   }
   public setDesignSystemInputs(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
+      this.requireDesignInputsMutable();
       if (!isPlainDataRecord(value) || !hasExactDataKeys(value, ['inputs']))
         throw new DesignerApplicationError('Design-system input selection is invalid.');
       const values = value.inputs;
@@ -5064,6 +5291,17 @@ export class DesktopDesignerApplicationService {
           throw new DesignerApplicationError('Design-system input is unavailable.');
         return Object.freeze({ ...input, enabled: selection.enabled });
       });
+      const enabledPackages = new Set(
+        next.filter((input) => input.enabled).map((input) => input.receipt.packageName)
+      );
+      const removedPackages = existing
+        .filter((input) => input.enabled && !enabledPackages.has(input.receipt.packageName))
+        .map((input) => input.receipt.packageName);
+      const usage = sourceDesignInputUsage(this.source, removedPackages);
+      if (usage.length > 0)
+        throw new DesignerApplicationError(
+          `Replace the components or imports from ${usage[0]?.packageName} in ${usage[0]?.path} before disabling that design system.`
+        );
       const previous = this.designInputProvenance;
       this.designSystemCompilerActivation?.activate(
         next.filter((input) => input.enabled).map((input) => input.id)
@@ -5081,7 +5319,7 @@ export class DesktopDesignerApplicationService {
           : { designLanguages: this.designInputProvenance.designLanguages })
       };
       try {
-        await this.persistProjectState();
+        await this.withDesignInputMutation(previous, () => this.persistProjectState());
       } catch (error) {
         this.designInputProvenance = previous;
         this.designSystemCompilerActivation?.activate(
@@ -5096,6 +5334,7 @@ export class DesktopDesignerApplicationService {
     markdown: string,
     displayLabel?: string
   ): Promise<MarkdownIntakeReceipt> {
+    this.requireDesignInputsMutable();
     const value = Object.freeze({ markdown });
     const stagedReceipt = await this.setupIntake.ingestMarkdown(value);
     const receipt: MarkdownIntakeReceipt = {
@@ -5153,7 +5392,9 @@ export class DesktopDesignerApplicationService {
       ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
     };
     try {
-      await this.persistGuidanceState([{ digest: receipt.artifactDigest, markdown }]);
+      await this.withDesignInputMutation(previous, () =>
+        this.persistGuidanceState([{ digest: receipt.artifactDigest, markdown }])
+      );
     } catch (error) {
       this.designInputProvenance = previous;
       throw error;
@@ -5162,6 +5403,7 @@ export class DesktopDesignerApplicationService {
   }
   public ingestDesignLanguage(value: unknown): Promise<MarkdownIntakeReceipt> {
     return this.enqueueGraphOperation(async () => {
+      this.requireDesignInputsMutable();
       if (
         !isPlainDataRecord(value) ||
         !hasExactDataKeys(value, ['markdown']) ||
@@ -5188,6 +5430,7 @@ export class DesktopDesignerApplicationService {
     projectId: string
   ): Promise<readonly MarkdownIntakeReceipt[]> {
     return this.enqueueGraphOperation(async () => {
+      this.requireDesignInputsMutable();
       const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
       if (expectedProjectId !== this.source.projectId)
         throw new DesignerApplicationError('Project changed before the Markdown import began.');
@@ -5248,12 +5491,14 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designLanguage: structuredClone(next[0].receipt) })
       };
       try {
-        await this.persistGuidanceState(
-          additions.map(({ entry, receipt }) => ({
-            digest: receipt.artifactDigest,
-            markdown: entry.markdown,
-            sourceLocator: entry.sourceLocator
-          }))
+        await this.withDesignInputMutation(previous, () =>
+          this.persistGuidanceState(
+            additions.map(({ entry, receipt }) => ({
+              digest: receipt.artifactDigest,
+              markdown: entry.markdown,
+              sourceLocator: entry.sourceLocator
+            }))
+          )
         );
       } catch (error) {
         this.designInputProvenance = previous;
@@ -5276,6 +5521,7 @@ export class DesktopDesignerApplicationService {
     projectId: string,
     requestedLocator?: string
   ): Promise<MarkdownSourceRefreshResult> {
+    this.requireDesignInputsMutable();
     const expectedProjectId = validateDesignerIdentifier(projectId, 'projectId');
     if (expectedProjectId !== this.source.projectId || !/^[a-f0-9]{64}$/.test(artifactDigest))
       throw new DesignerApplicationError('Design-language source refresh is unavailable.');
@@ -5338,15 +5584,17 @@ export class DesktopDesignerApplicationService {
       ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
     };
     try {
-      await this.persistGuidanceState(
-        [
-          {
-            digest: staged.artifactDigest,
-            markdown: imported.markdown,
-            sourceLocator: imported.sourceLocator
-          }
-        ],
-        [artifactDigest]
+      await this.withDesignInputMutation(previous, () =>
+        this.persistGuidanceState(
+          [
+            {
+              digest: staged.artifactDigest,
+              markdown: imported.markdown,
+              sourceLocator: imported.sourceLocator
+            }
+          ],
+          [artifactDigest]
+        )
       );
     } catch (error) {
       this.designInputProvenance = previous;
@@ -5376,6 +5624,7 @@ export class DesktopDesignerApplicationService {
   }
   public setDesignLanguageInputs(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
+      this.requireDesignInputsMutable();
       if (!isPlainDataRecord(value) || !hasExactDataKeys(value, ['inputs']))
         throw new DesignerApplicationError('Design-language input selection is invalid.');
       const values = value.inputs;
@@ -5431,11 +5680,13 @@ export class DesktopDesignerApplicationService {
         ...(next[0] === undefined ? {} : { designLanguage: next[0].receipt })
       };
       try {
-        await this.persistGuidanceState(
-          [],
-          existing
-            .filter((removed) => !next.some((input) => input.id === removed.id))
-            .map((removed) => removed.id)
+        await this.withDesignInputMutation(previous, () =>
+          this.persistGuidanceState(
+            [],
+            existing
+              .filter((removed) => !next.some((input) => input.id === removed.id))
+              .map((removed) => removed.id)
+          )
         );
       } catch (error) {
         this.designInputProvenance = previous;
@@ -5465,6 +5716,10 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      prototypeGraph: { revision: this.graphRevision, graph: this.graph },
+      ...(this.archivedManualReactEditJournal.length === 0
+        ? {}
+        : { archivedManualReactEditJournal: this.archivedManualReactEditJournal }),
       ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(this.manualReactEditAuthority === undefined
         ? {}
@@ -5489,6 +5744,10 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      prototypeGraph: { revision: this.graphRevision, graph: this.graph },
+      ...(this.archivedManualReactEditJournal.length === 0
+        ? {}
+        : { archivedManualReactEditJournal: this.archivedManualReactEditJournal }),
       ...(this.reactBinding === undefined ? {} : { reactBinding: this.reactBinding }),
       ...(this.manualReactEditAuthority === undefined
         ? {}
@@ -5565,6 +5824,10 @@ export class DesktopDesignerApplicationService {
       version: 1,
       baseline: this.baseline,
       collaborationSnapshot: serializeSnapshot(this.collaboration),
+      prototypeGraph: { revision: this.graphRevision, graph: this.graph },
+      ...(this.archivedManualReactEditJournal.length === 0
+        ? {}
+        : { archivedManualReactEditJournal: this.archivedManualReactEditJournal }),
       ...(this.manualReactEditAuthority === undefined
         ? {}
         : { manualReactEditAuthority: this.manualReactEditAuthority }),
@@ -5664,6 +5927,8 @@ export class DesktopDesignerApplicationService {
     );
     // Compiler evidence is intentionally absent; reopen retains only parsed inert authority data.
     this.revokeReactBindingAuthority();
+    this.archivedManualReactEditJournal = stored.archivedManualReactEditJournal ?? [];
+    this.pendingPersistedGraph = stored.prototypeGraph;
     this.manualReactEditAuthority = stored.manualReactEditAuthority;
     this.manualReactEditJournal = stored.manualReactEditJournal;
     this.pendingReactBinding = stored.reactBinding;
@@ -5746,6 +6011,7 @@ export class DesktopDesignerApplicationService {
       revision.tuple.compiler.compilerDigest === compilerDigest
     )
       return current;
+    this.revokeManualReactEditAuthority();
     const createdAt = this.source.revision.createdAt;
     const retentionBase = Math.max(Date.now(), Date.parse(createdAt));
     if (!Number.isFinite(retentionBase))
@@ -5861,6 +6127,7 @@ export class DesktopDesignerApplicationService {
         this.manualReactEditAuthority = this.mintManualReactEditAuthority(evidence, artifact);
         if (candidate === undefined) {
           await this.persistProjectState();
+          this.lastActivatedBuildArtifact = artifact;
           this.activity.unshift(
             'Activated compiler-backed editing and target authority for the current React workspace.'
           );
@@ -5874,6 +6141,7 @@ export class DesktopDesignerApplicationService {
         });
         this.pendingReactBinding = undefined;
         await this.persistProjectState();
+        this.lastActivatedBuildArtifact = artifact;
         this.activity.unshift('Activated React binding from the current host build receipt.');
         return { status: 'activated' as const };
       })
@@ -6063,14 +6331,29 @@ export class DesktopDesignerApplicationService {
       compilerTargetEvidence: this.compilerTargetEvidence,
       manualReactEditAuthority: this.manualReactEditAuthority,
       manualReactEditJournal: this.manualReactEditJournal,
+      archivedManualReactEditJournal: this.archivedManualReactEditJournal,
       pendingAIProposal: this.pendingAIProposal,
       pendingReactBinding: this.pendingReactBinding,
-      pendingProjectStateMigration: this.pendingProjectStateMigration
+      pendingProjectStateMigration: this.pendingProjectStateMigration,
+      pendingPersistedGraph: this.pendingPersistedGraph
     };
   }
 
   /** Authority and its replay journal are one invariant and must be revoked together. */
-  private revokeManualReactEditAuthority(): void {
+  private archivedManualHistory(): readonly LocalManualReactEditJournalEntry[] {
+    return Object.freeze(
+      [
+        ...new Map(
+          [...this.archivedManualReactEditJournal, ...(this.manualReactEditJournal ?? [])].map(
+            (entry) => [entry.commandId, entry]
+          )
+        ).values()
+      ].slice(-32)
+    );
+  }
+
+  private revokeManualReactEditAuthority(archive = true): void {
+    if (archive) this.archivedManualReactEditJournal = this.archivedManualHistory();
     this.manualReactEditAuthority = undefined;
     this.manualReactEditJournal = undefined;
   }
@@ -6102,9 +6385,11 @@ export class DesktopDesignerApplicationService {
     this.compilerTargetEvidence = state.compilerTargetEvidence;
     this.manualReactEditAuthority = state.manualReactEditAuthority;
     this.manualReactEditJournal = state.manualReactEditJournal;
+    this.archivedManualReactEditJournal = state.archivedManualReactEditJournal;
     this.pendingAIProposal = state.pendingAIProposal;
     this.pendingReactBinding = state.pendingReactBinding;
     this.pendingProjectStateMigration = state.pendingProjectStateMigration;
+    this.pendingPersistedGraph = state.pendingPersistedGraph;
   }
 
   private async mutateDurably<T>(operation: () => Promise<T>): Promise<T> {
@@ -6148,6 +6433,7 @@ export class DesktopDesignerApplicationService {
         selectedNodeId: this.selectedNodeId,
         selectedScenarioId: this.selectedScenarioId,
         graph: this.graph,
+        pendingPersistedGraph: this.pendingPersistedGraph,
         graphRevision: this.graphRevision,
         graphHydration: this.graphHydration,
         graphMode: this.graphMode,
@@ -6156,6 +6442,7 @@ export class DesktopDesignerApplicationService {
         compilerTargetEvidence: this.compilerTargetEvidence,
         manualReactEditAuthority: this.manualReactEditAuthority,
         manualReactEditJournal: this.manualReactEditJournal,
+        archivedManualReactEditJournal: this.archivedManualReactEditJournal,
         pendingAIProposal: this.pendingAIProposal,
         pendingReactBinding: this.pendingReactBinding,
         pendingProjectStateMigration: this.pendingProjectStateMigration,
@@ -6167,8 +6454,11 @@ export class DesktopDesignerApplicationService {
       try {
         this.projectGeneration += 1;
         this.source = workspace;
+        this.pendingPersistedGraph = undefined;
+        this.archivedManualReactEditJournal = [];
         this.manualTextEditCapabilities.clear();
         this.manualElementRemoveCapabilities.clear();
+        this.manualElementDuplicateCapabilities.clear();
         this.manualLayoutEditCapabilities.clear();
         this.manualAppearanceEditCapabilities.clear();
         this.manualPositionEditCapabilities.clear();
@@ -6176,7 +6466,7 @@ export class DesktopDesignerApplicationService {
         this.designSystemComponentReplaceCapabilities.clear();
         this.designSystemComponentPropertyEditCapabilities.clear();
         this.revokeReactBindingAuthority();
-        this.revokeManualReactEditAuthority();
+        this.revokeManualReactEditAuthority(false);
         this.pendingAIProposal = undefined;
         this.pendingReactBinding = undefined;
         this.pendingProjectStateMigration = false;
@@ -6237,6 +6527,7 @@ export class DesktopDesignerApplicationService {
         this.selectedNodeId = prior.selectedNodeId;
         this.selectedScenarioId = prior.selectedScenarioId;
         this.graph = prior.graph;
+        this.pendingPersistedGraph = prior.pendingPersistedGraph;
         this.graphRevision = prior.graphRevision;
         this.graphHydration = prior.graphHydration;
         this.graphMode = prior.graphMode;
@@ -6245,6 +6536,7 @@ export class DesktopDesignerApplicationService {
         this.compilerTargetEvidence = prior.compilerTargetEvidence;
         this.manualReactEditAuthority = prior.manualReactEditAuthority;
         this.manualReactEditJournal = prior.manualReactEditJournal;
+        this.archivedManualReactEditJournal = prior.archivedManualReactEditJournal;
         this.pendingAIProposal = prior.pendingAIProposal;
         this.pendingReactBinding = prior.pendingReactBinding;
         this.pendingProjectStateMigration = prior.pendingProjectStateMigration;
@@ -6275,8 +6567,12 @@ export class DesktopDesignerApplicationService {
     // A graph replacement changes the binding authority tuple. Never retain a
     // prior binding while a new graph is being loaded or recovered.
     this.revokeReactBindingAuthority();
-    this.revokeManualReactEditAuthority();
-    if (!preservePendingBinding) this.pendingReactBinding = undefined;
+    // Same-project reopen retains inert durable history. Fresh compiler evidence
+    // must match its complete tuple before the history becomes available again.
+    if (!preservePendingBinding) {
+      this.revokeManualReactEditAuthority();
+      this.pendingReactBinding = undefined;
+    }
     try {
       const saved = await this.graphPersistence.read(this.source.projectId);
       if (saved) {
@@ -6290,8 +6586,11 @@ export class DesktopDesignerApplicationService {
         this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`);
         return this.graphHydration;
       }
-      this.graph = freshPrototypeGraphForWorkspace(this.source);
-      this.graphRevision = 0;
+      this.graph =
+        preservePendingBinding && this.pendingPersistedGraph !== undefined
+          ? this.pendingPersistedGraph.graph
+          : freshPrototypeGraphForWorkspace(this.source);
+      this.graphRevision = preservePendingBinding ? (this.pendingPersistedGraph?.revision ?? 0) : 0;
       this.graphHydration = { state: 'missing' };
       this.activity.unshift(
         'No saved flow graph exists; initialized the local fixture at revision 0.'
@@ -6342,69 +6641,96 @@ export class DesktopDesignerApplicationService {
         ? {}
         : { resultingRevisionId: request.resultingRevisionId })
     }));
-    const latestManual = this.manualReactEditJournal?.at(-1);
-    const manualActivity: DesignActivityEntry[] = (this.manualReactEditJournal ?? []).map(
-      (entry) => {
-        const command = entry.receipt.commandSummary[0];
-        const kind: DesignActivityEntry['kind'] =
-          command?.kind === 'set-layout'
-            ? 'layout'
-            : command?.kind === 'set-style' && command.count === 2
-              ? 'position'
-              : command?.kind === 'set-style'
-                ? 'appearance'
-                : command?.kind === 'reorder-child'
-                  ? 'reorder'
-                  : command?.kind === 'reparent-child'
-                    ? 'reparent'
+    const journal = this.manualReactEditJournal ?? [];
+    const latestManual = journal
+      .filter((entry) => (entry.lifecycle ?? 'applied') === 'applied')
+      .at(-1);
+    const nextRedo = journal.find((entry) => entry.lifecycle === 'undone');
+    const historyHead = manualReactEditHistoryHead(journal);
+    const historyCurrent =
+      this.manualReactEditAuthority?.workspaceRevisionId === this.source.revision.id &&
+      historyHead?.revisionCommitment ===
+        this.manualReactEditAuthority?.designRevision.revisionCommitment &&
+      historyHead?.tuple.graphDigest ===
+        createHash('sha256').update(serializeCanonicalData(this.graph)).digest('hex') &&
+      historyHead.tuple.designSystemLockDigest === digest(this.designInputProvenance);
+    const manualActivity: DesignActivityEntry[] = [
+      ...this.archivedManualReactEditJournal,
+      ...journal
+    ].map((entry) => {
+      const command = entry.receipt.commandSummary[0];
+      const kind: DesignActivityEntry['kind'] =
+        command?.kind === 'set-layout'
+          ? 'layout'
+          : command?.kind === 'set-style' && command.count === 2
+            ? 'position'
+            : command?.kind === 'set-style'
+              ? 'appearance'
+              : command?.kind === 'reorder-child'
+                ? 'reorder'
+                : command?.kind === 'reparent-child'
+                  ? 'reparent'
+                  : command?.kind === 'duplicate-node'
+                    ? 'duplicate'
                     : command?.kind === 'remove-node'
                       ? 'remove'
                       : 'content';
-        const label =
-          kind === 'layout'
-            ? 'Adjusted element layout'
-            : kind === 'position'
-              ? 'Moved element on the artboard'
-              : kind === 'appearance'
-                ? 'Updated element appearance'
-                : kind === 'reorder'
-                  ? 'Reordered element'
-                  : kind === 'reparent'
-                    ? 'Moved element into another container'
+      const label =
+        kind === 'layout'
+          ? 'Adjusted element layout'
+          : kind === 'position'
+            ? 'Moved element on the artboard'
+            : kind === 'appearance'
+              ? 'Updated element appearance'
+              : kind === 'reorder'
+                ? 'Reordered element'
+                : kind === 'reparent'
+                  ? 'Moved element into another container'
+                  : kind === 'duplicate'
+                    ? 'Duplicated React element'
                     : kind === 'remove'
                       ? 'Removed React element'
                       : 'Edited element text';
-        const lifecycle = entry.lifecycle ?? 'applied';
-        const current =
-          latestManual === entry &&
-          lifecycle === 'applied' &&
-          this.manualReactEditAuthority?.workspaceRevisionId === this.source.revision.id &&
-          this.manualReactEditAuthority.designRevision.revisionId === entry.targetRevisionId;
-        const disabledReason: NonNullable<DesignActivityEntry['undo']>['disabledReason'] =
-          lifecycle === 'undone'
-            ? 'ALREADY_UNDONE'
+      const lifecycle = entry.lifecycle ?? 'applied';
+      const current = latestManual === entry && lifecycle === 'applied' && historyCurrent;
+      const disabledReason: NonNullable<DesignActivityEntry['undo']>['disabledReason'] =
+        lifecycle !== 'applied'
+          ? 'ALREADY_UNDONE'
+          : !journal.includes(entry)
+            ? 'SOURCE_CHANGED'
             : latestManual !== entry
               ? 'NOT_LATEST'
               : 'SOURCE_CHANGED';
-        return {
-          id: `manual:${entry.receipt.undo.undoId}`,
-          origin: 'manual',
-          kind,
-          label,
-          actorLabel: 'You',
-          createdAt: entry.receipt.appliedAt,
-          status: lifecycle,
-          referenceId: entry.commandId,
-          resultingRevisionId: entry.undoResult?.workspaceRevisionId ?? entry.targetRevisionId,
-          undo: {
-            undoId: entry.receipt.undo.undoId,
-            targetRevisionId: entry.targetRevisionId,
-            available: current,
-            ...(current ? {} : { disabledReason })
-          }
-        };
-      }
-    );
+      return {
+        id: `manual:${entry.receipt.undo.undoId}`,
+        origin: 'manual',
+        kind,
+        label,
+        actorLabel: 'You',
+        createdAt: entry.receipt.appliedAt,
+        status: lifecycle === 'abandoned' ? 'undone' : lifecycle,
+        referenceId: entry.commandId,
+        resultingRevisionId:
+          entry.redoResult?.workspaceRevisionId ??
+          entry.undoResult?.workspaceRevisionId ??
+          entry.targetRevisionId,
+        ...(entry.lifecycle !== 'undone'
+          ? {}
+          : {
+              redo: {
+                undoId: entry.receipt.undo.undoId,
+                targetRevisionId: entry.targetRevisionId,
+                available: nextRedo === entry && historyCurrent
+              }
+            }),
+        undo: {
+          undoId: entry.receipt.undo.undoId,
+          targetRevisionId: entry.targetRevisionId,
+          available: current,
+          ...(current ? {} : { disabledReason })
+        }
+      };
+    });
     return Object.freeze(
       [...agentActivity, ...manualActivity]
         .sort(
@@ -6465,14 +6791,13 @@ export class DesktopDesignerApplicationService {
       ...(this.pendingAIProposal === undefined
         ? {}
         : {
-            pendingAIProposal: {
-              requestId: this.pendingAIProposal.requestId,
-              agentId: this.pendingAIProposal.agentId,
-              baseRevisionId: this.pendingAIProposal.baseRevisionId,
-              candidateRevisionId: this.pendingAIProposal.candidateWorkspace.revision.id,
-              summary: this.pendingAIProposal.summary,
-              createdAt: this.pendingAIProposal.createdAt
-            }
+            pendingAIProposal: projectPendingAIProposal({
+              source: this.source,
+              proposal: this.pendingAIProposal,
+              target: aiChangeRequests.find(
+                (request) => request.id === this.pendingAIProposal?.requestId
+              )?.target
+            })
           }),
       developerAnnotations: projected.developerAnnotations,
       scenarios: enterpriseScenarioFixtures,
@@ -6536,12 +6861,62 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Renderer submits a complete portable graph; parsing rejects malformed ports and edges atomically. */
+  private prototypeGraphBaseline(
+    previous: PrototypeGraph,
+    current: PrototypeGraph,
+    beforeRevision: number,
+    currentRevision: number,
+    recovery = false
+  ): DesignBaselineState {
+    if (!recovery && serializeCanonicalData(previous) === serializeCanonicalData(current))
+      return this.baseline;
+    const screens = current.nodes.filter((node) => node.kind === 'page' || node.kind === 'screen');
+    return executeDesignBaselineCommand(this.baseline, {
+      type: 'apply-design-mutation',
+      change: {
+        id: `design-flow-${this.source.projectId}-${currentRevision}`,
+        kind: 'flow',
+        beforeRevision: {
+          id: `flow:${this.source.projectId}:${beforeRevision}`,
+          fingerprint: digest(previous)
+        },
+        currentRevision: {
+          id: `flow:${this.source.projectId}:${currentRevision}`,
+          fingerprint: digest(current)
+        },
+        affected: {
+          projectId: this.source.projectId,
+          screenIds: screens.map((node) => node.id),
+          routePaths: screens.flatMap((node) =>
+            node.kind === 'page' || node.kind === 'screen' ? [node.route] : []
+          ),
+          scenarioIds: current.scenarios.map((scenario) => scenario.id),
+          componentIds: [],
+          stableNodeIds: []
+        },
+        evidence: [
+          {
+            description:
+              'Saved the validated flow graph, including scenario paths, with its review delta.'
+          }
+        ],
+        provenance: { kind: 'actor', actorId: this.collaborationAuthorId },
+        occurredAt: new Date().toISOString(),
+        reason: recovery
+          ? 'Recovered the prototype flow after saved graph corruption.'
+          : 'Updated prototype pages, positions, states, connections or scenarios.'
+      }
+    });
+  }
+
   public savePrototypeGraph(value: unknown): Promise<DesignerSnapshot> {
     return this.enqueueGraphOperation(async () => {
       if (this.graphHydration.state === 'recovery-required')
         throw new DesignerApplicationError(
           'Saved graph recovery is required before edits can be persisted.'
         );
+      if (this.active !== undefined || this.pendingAIProposal !== undefined)
+        throw new DesignerApplicationError('Finish the AI change before editing the flow graph.');
       const graph = parsePrototypeGraph(value);
       const projectId = this.source.projectId;
       if (graph.project.projectId !== projectId)
@@ -6550,7 +6925,26 @@ export class DesktopDesignerApplicationService {
         );
       const revision = this.graphRevision;
       const generation = this.projectGeneration;
-      const saved = await this.graphPersistence.compareAndSwap(projectId, revision, graph);
+      const baseline = this.prototypeGraphBaseline(this.graph, graph, revision, revision + 1);
+      const collaboration = {
+        ...this.collaboration,
+        designReviewState: toCollaborationDesignReviewState(baseline)
+      };
+      const {
+        reactBinding: _binding,
+        manualReactEditAuthority: _authority,
+        manualReactEditJournal: _journal,
+        ...currentState
+      } = this.guidanceState();
+      const archived = this.archivedManualHistory();
+      const state: LocalDesignerState = {
+        ...currentState,
+        baseline,
+        ...(archived.length === 0 ? {} : { archivedManualReactEditJournal: archived }),
+        collaborationSnapshot: serializeSnapshot(collaboration),
+        prototypeGraph: { revision: revision + 1, graph }
+      };
+      const saved = await this.graphPersistence.compareAndSwap(projectId, revision, graph, state);
       if (
         this.projectGeneration !== generation ||
         this.source.projectId !== projectId ||
@@ -6561,11 +6955,13 @@ export class DesktopDesignerApplicationService {
         );
       this.graph = saved.graph;
       this.graphRevision = saved.revision;
+      this.replaceCollaboration(collaboration);
       this.revokeReactBindingAuthority();
       this.revokeManualReactEditAuthority();
       this.pendingReactBinding = undefined;
       this.graphHydration = { state: 'persisted' };
       this.prototypeRuntime = undefined;
+      if (this.graphPersistence.commitsDesignerState !== true) await this.persistProjectState();
       this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
       return this.snapshot();
     });
@@ -6582,10 +6978,36 @@ export class DesktopDesignerApplicationService {
     return this.enqueueGraphOperation(async () => {
       if (this.graphHydration.state !== 'recovery-required')
         throw new DesignerApplicationError('No graph recovery is required.');
-      const result = await this.graphPersistence.recoverFromFixture(
-        this.source.projectId,
-        freshPrototypeGraphForWorkspace(this.source)
+      if (this.active !== undefined || this.pendingAIProposal !== undefined)
+        throw new DesignerApplicationError(
+          'Finish the AI change before recovering the flow graph.'
+        );
+      const graph = freshPrototypeGraphForWorkspace(this.source);
+      const baseline = this.prototypeGraphBaseline(
+        this.graph,
+        graph,
+        this.graphRevision,
+        this.graphRevision + 1,
+        true
       );
+      const collaboration = {
+        ...this.collaboration,
+        designReviewState: toCollaborationDesignReviewState(baseline)
+      };
+      const {
+        reactBinding: _binding,
+        manualReactEditAuthority: _authority,
+        manualReactEditJournal: _journal,
+        ...state
+      } = this.guidanceState();
+      const archived = this.archivedManualHistory();
+      const result = await this.graphPersistence.recoverFromFixture(this.source.projectId, graph, {
+        ...state,
+        baseline,
+        collaborationSnapshot: serializeSnapshot(collaboration),
+        ...(archived.length === 0 ? {} : { archivedManualReactEditJournal: archived })
+      });
+      this.replaceCollaboration(collaboration);
       this.graph = result.saved.graph;
       this.graphRevision = result.saved.revision;
       this.revokeReactBindingAuthority();
@@ -6597,6 +7019,7 @@ export class DesktopDesignerApplicationService {
         state: 'persisted',
         recovery: result.receipt
       };
+      if (this.graphPersistence.commitsDesignerState !== true) await this.persistProjectState();
       this.activity.unshift(
         `Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`
       );
@@ -6716,11 +7139,23 @@ export class DesktopDesignerApplicationService {
   /** Capability/consent-gated adapter owns publication; renderer receives an immutable receipt only. */
   private async captureImmutablePublishBundle(): Promise<ImmutablePublishBundle> {
     const metadata = await this.handoffMetadata.load();
+    const build = this.lastActivatedBuildArtifact;
+    const compilerEvidence = this.compilerTargetEvidence;
+    const reactBinding = this.reactBinding;
+    const compiledArtifact =
+      build?.receipt?.projectId === this.source.projectId &&
+      build.revisionId === this.source.revision.id &&
+      reactBinding?.sourceRevisionId === this.source.revision.id &&
+      reactBinding.graphRevision === this.graphRevision &&
+      compilerEvidence?.outputSha256 === build.receipt.outputSha256
+        ? { build, reactBinding, compilerEvidence }
+        : undefined;
     return createImmutablePublishBundle({
       projectId: this.source.projectId,
       source: this.source,
       prototype: { graph: this.graph, revision: this.graphRevision },
-      scenarios: enterpriseScenarioFixtures,
+      ...(compiledArtifact === undefined ? {} : { compiledArtifact }),
+      scenarios: [],
       collaborationSnapshot: serializeSnapshot(this.collaboration),
       designInputProvenance: this.designInputProvenance,
       componentCatalog: componentCatalogFor(
@@ -7113,6 +7548,7 @@ export class DesktopDesignerApplicationService {
           throw new DesignerApplicationError(
             `annotation references unknown node: ${annotation.nodeRef}`
           );
+        const beforeDirections = this.collaboration.developerAnnotations;
         this.developerAnnotations.push({
           id: `annotation-${this.developerAnnotations.length + 1}`,
           ...annotation,
@@ -7141,6 +7577,17 @@ export class DesktopDesignerApplicationService {
               createdAt: saved.createdAt
             }
           ]
+        });
+        this.replaceCollaboration({
+          ...this.collaboration,
+          designReviewState: toCollaborationDesignReviewState(
+            this.metadataDesignBaseline(
+              'direction',
+              beforeDirections,
+              this.collaboration.developerAnnotations,
+              'Updated developer handoff directions.'
+            )
+          )
         });
         this.activity.unshift(`Added ${annotation.category} developer annotation.`);
         await this.persistProjectState();
@@ -7359,6 +7806,7 @@ export class DesktopDesignerApplicationService {
             baseFingerprint: digest(this.source),
             candidateWorkspace,
             candidateFingerprint,
+            compileEvidence: evidence,
             summary: patch.summary.slice(0, 1_000),
             createdAt: candidateWorkspace.revision.createdAt
           });
@@ -7579,7 +8027,18 @@ export class DesktopDesignerApplicationService {
    * Compensates the current manual edit with a new compiled child revision.
    * The renderer supplies only receipt identity; source recovery stays host-owned.
    */
-  public async undoLatestManualDesignEdit(value: unknown): Promise<DesignerSnapshot> {
+  public undoLatestManualDesignEdit(value: unknown): Promise<DesignerSnapshot> {
+    return this.restoreManualDesignHistory(value, 'undo');
+  }
+
+  public redoLatestManualDesignEdit(value: unknown): Promise<DesignerSnapshot> {
+    return this.restoreManualDesignHistory(value, 'redo');
+  }
+
+  private async restoreManualDesignHistory(
+    value: unknown,
+    operation: 'undo' | 'redo'
+  ): Promise<DesignerSnapshot> {
     if (this.undoActive) throw new DesignerApplicationError('a design undo is already running');
     this.undoActive = true;
     try {
@@ -7599,27 +8058,39 @@ export class DesktopDesignerApplicationService {
           if (this.projectState === undefined)
             throw new DesignerApplicationError('manual undo persistence is unavailable');
           const authority = this.manualReactEditAuthority;
-          const entry = this.manualReactEditJournal?.at(-1);
+          const entries = this.manualReactEditJournal ?? [];
+          const entry =
+            operation === 'undo'
+              ? entries
+                  .filter((candidate) => (candidate.lifecycle ?? 'applied') === 'applied')
+                  .at(-1)
+              : entries.find((candidate) => candidate.lifecycle === 'undone');
+          const historyHead = manualReactEditHistoryHead(entries);
           if (
             authority === undefined ||
             entry === undefined ||
-            (entry.lifecycle ?? 'applied') !== 'applied' ||
+            input.currentRevisionId !== this.source.revision.id ||
             entry.receipt.undo.undoId !== input.undoId ||
             entry.targetRevisionId !== input.targetRevisionId
           )
-            throw new DesignerApplicationError('only the latest applied manual edit may be undone');
+            throw new DesignerApplicationError(
+              `only the current ${operation} entry may be restored`
+            );
           if (
             authority.workspaceRevisionId !== this.source.revision.id ||
-            authority.designRevision.revisionId !== entry.targetRevisionId ||
-            entry.receipt.targetRevision.revisionCommitment !==
-              authority.designRevision.revisionCommitment
+            historyHead?.revisionId !== authority.designRevision.revisionId ||
+            historyHead.revisionCommitment !== authority.designRevision.revisionCommitment ||
+            historyHead.tuple.graphDigest !==
+              createHash('sha256').update(serializeCanonicalData(this.graph)).digest('hex') ||
+            historyHead.tuple.designSystemLockDigest !== digest(this.designInputProvenance)
           )
             throw new DesignerApplicationError(
               'manual edit is no longer the current design revision'
             );
           const latestCanonical = this.collaboration.revisions.at(-1);
           const base = this.collaboration.revisions.find(
-            (revision) => revision.id === latestCanonical?.parentRevisionId
+            (revision) =>
+              revision.id === (operation === 'undo' ? entry.baseRevisionId : entry.targetRevisionId)
           );
           if (
             latestCanonical === undefined ||
@@ -7632,6 +8103,13 @@ export class DesktopDesignerApplicationService {
             throw new DesignerApplicationError(
               'manual edit base revision is unavailable or invalid'
             );
+          const expected = this.collaboration.revisions.find(
+            (revision) =>
+              revision.id === (operation === 'undo' ? entry.targetRevisionId : entry.baseRevisionId)
+          );
+          if (expected === undefined)
+            throw new DesignerApplicationError('manual history checkpoint is unavailable');
+          let expectedContent: ReactSourceWorkspace;
           let latestContent: ReactSourceWorkspace;
           let baseContent: ReactSourceWorkspace;
           try {
@@ -7640,6 +8118,8 @@ export class DesktopDesignerApplicationService {
             const policy = { allowedBareDependencies: this.source.dependencies };
             validateReactSourceWorkspace(latestCanonical.content as ReactSourceWorkspace, policy);
             validateReactSourceWorkspace(base.content as ReactSourceWorkspace, policy);
+            validateReactSourceWorkspace(expected.content as ReactSourceWorkspace, policy);
+            expectedContent = expected.content as ReactSourceWorkspace;
             latestContent = latestCanonical.content as ReactSourceWorkspace;
             baseContent = base.content as ReactSourceWorkspace;
           } catch {
@@ -7657,6 +8137,16 @@ export class DesktopDesignerApplicationService {
             throw new DesignerApplicationError(
               'manual edit base revision is unavailable or invalid'
             );
+          const { revision: _expectedRevision, ...expectedWithoutRevision } = expectedContent;
+          const { revision: _currentRevision, ...currentWithoutRevision } = this.source;
+          if (
+            digest(expectedContent) !== expected.contentSha256 ||
+            serializeCanonicalData(expectedWithoutRevision) !==
+              serializeCanonicalData(currentWithoutRevision)
+          )
+            throw new DesignerApplicationError(
+              'manual history no longer matches the current workspace'
+            );
           const createdAt = strictlyLaterTimestamp(
             this.source.revision.createdAt,
             latestCanonical.createdAt,
@@ -7665,10 +8155,10 @@ export class DesktopDesignerApplicationService {
           const restored = Object.freeze({
             ...baseContent,
             revision: Object.freeze({
-              id: `manual-undo-${randomUUID()}`,
+              id: `manual-${operation}-${randomUUID()}`,
               parentId: this.source.revision.id,
               createdAt,
-              summary: 'Undo latest manual design edit'
+              summary: `${operation === 'undo' ? 'Undo' : 'Redo'} manual design edit`
             })
           });
           validateReactSourceWorkspace(restored, {
@@ -7682,7 +8172,7 @@ export class DesktopDesignerApplicationService {
           const undoDigest = createHash('sha256')
             .update(
               serializeCanonicalData([
-                'selene-manual-design-undo/v1',
+                `selene-manual-design-${operation}/v1`,
                 input.undoId,
                 input.targetRevisionId,
                 this.source.revision.id,
@@ -7700,20 +8190,27 @@ export class DesktopDesignerApplicationService {
             undoDigest,
             contentDeltaDigest
           );
+          const result = Object.freeze({
+            workspaceRevisionId: restored.revision.id,
+            designRevision: nextDesignRevision,
+            completedAt: createdAt
+          });
           const journal = Object.freeze(
-            (this.manualReactEditJournal ?? []).map((candidate, index, entries) =>
-              index !== entries.length - 1
-                ? candidate
-                : Object.freeze({
-                    ...candidate,
-                    lifecycle: 'undone' as const,
-                    undoResult: Object.freeze({
-                      workspaceRevisionId: restored.revision.id,
-                      designRevision: nextDesignRevision,
-                      completedAt: createdAt
-                    })
-                  })
-            )
+            entries.map((candidate) => {
+              if (candidate !== entry) return candidate;
+              if (operation === 'redo')
+                return Object.freeze({
+                  ...candidate,
+                  lifecycle: 'applied' as const,
+                  redoResult: result
+                });
+              const { redoResult: _redoResult, ...withoutRedo } = candidate;
+              return Object.freeze({
+                ...withoutRedo,
+                lifecycle: 'undone' as const,
+                undoResult: result
+              });
+            })
           );
           const baseline = this.manualUndoBaseline(this.source, restored, entry);
           const collaboration = {
@@ -7743,18 +8240,29 @@ export class DesktopDesignerApplicationService {
             ...this.guidanceState(),
             baseline,
             collaborationSnapshot: serializeSnapshot(collaboration),
+            prototypeGraph: { revision: this.graphRevision, graph: this.graph },
+            ...(this.archivedManualReactEditJournal.length === 0
+              ? {}
+              : { archivedManualReactEditJournal: this.archivedManualReactEditJournal }),
             manualReactEditAuthority: nextAuthority,
             manualReactEditJournal: journal
           };
           await this.projectState.commitDesignerRevision(restored.projectId, restored, state);
           this.source = restored;
+          if (
+            this.selectedNodeId !== undefined &&
+            !restored.nodes.some((node) => node.nodeId === this.selectedNodeId)
+          )
+            this.selectedNodeId = undefined;
           this.baseline = baseline;
           this.replaceCollaboration(collaboration);
           this.manualReactEditAuthority = nextAuthority;
           this.manualReactEditJournal = journal;
           this.revokeReactBindingAuthority();
           this.pendingReactBinding = undefined;
-          this.activity.unshift('Undid the latest manual design edit with a compiled revision.');
+          this.activity.unshift(
+            `${operation === 'undo' ? 'Undid' : 'Redid'} a manual design edit with a compiled revision.`
+          );
           return this.snapshot();
         })
       );

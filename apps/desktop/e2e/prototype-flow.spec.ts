@@ -7,6 +7,10 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
 
+import { assertNativeElectronTestAllowed } from '../../../scripts/playwright-harness.mjs';
+
+test.beforeAll(() => assertNativeElectronTestAllowed());
+
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const harnessMain = fileURLToPath(new URL('./prototype-flow-harness-main.cjs', import.meta.url));
 const workspaceToolbarHarnessMain = fileURLToPath(
@@ -201,6 +205,7 @@ function desktopArgs(userData: string): string[] {
 }
 
 async function electronExecutable(): Promise<string> {
+  assertNativeElectronTestAllowed();
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
@@ -280,6 +285,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Design',
       'Components',
       'Present',
+      'Undo',
+      'Redo',
+      'Connections',
       'Hand H',
       'Fit all ⇧1',
       'Reset ⇧0',
@@ -1274,6 +1282,281 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     throw error;
   } finally {
     if (application) await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('persists integrated flow undo, redo, keyboard edits and pointer reconnection', async ({
+  browserName: _browserName
+}, testInfo) => {
+  test.setTimeout(90_000);
+  const userData = await mkdtemp(join(tmpdir(), 'selene-canvas-flow-history-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await window.bringToFront();
+    await window.getByLabel('Project name').fill('Flow history journey');
+    await window.getByRole('button', { name: 'Create project' }).click();
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .toMatch(/^flow-history-journey-/);
+    const canvas = window.getByLabel('Design canvas');
+    const tools = canvas.getByRole('toolbar', { name: 'Canvas tools' });
+    const undo = tools.getByRole('button', { name: 'Undo flow change', exact: true });
+    const redo = tools.getByRole('button', { name: 'Redo flow change', exact: true });
+    const readGraph = () =>
+      window.evaluate(async () => (await window.selene.designer.snapshot()).editablePrototype);
+    const before = await readGraph();
+    const originalSourceRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const originalPosition = before.graph.nodes.find((node) => node.id === 'dashboard')?.position;
+    const originalConnection = before.graph.transitions.find(
+      (transition) => transition.from.nodeId === 'dashboard' && transition.kind === 'navigate'
+    );
+    if (!originalPosition || !originalConnection || !('to' in originalConnection))
+      throw new Error('The desktop fixture must contain Dashboard navigation.');
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    await expect(canvas.getByLabel('Compiled React artboard')).toBeVisible();
+    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    const dashboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const handle = dashboard.locator('.canvas-artboard__drag-handle');
+    await expect(handle).toBeVisible();
+    let previousHandleBounds: Awaited<ReturnType<typeof handle.boundingBox>>;
+    let stableHandleFrames = 0;
+    await expect
+      .poll(
+        async () => {
+          const bounds = await handle.boundingBox();
+          if (!bounds) return false;
+          const stable =
+            previousHandleBounds &&
+            Math.abs(bounds.x - previousHandleBounds.x) < 0.5 &&
+            Math.abs(bounds.y - previousHandleBounds.y) < 0.5 &&
+            Math.abs(bounds.width - previousHandleBounds.width) < 0.5;
+          stableHandleFrames = stable ? stableHandleFrames + 1 : 0;
+          previousHandleBounds = bounds;
+          const receivesPointer = await handle.evaluate(
+            (element, point) => {
+              const hit = document.elementFromPoint(point.x, point.y);
+              return hit === element || (hit !== null && element.contains(hit));
+            },
+            { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+          );
+          return receivesPointer && stableHandleFrames >= 3;
+        },
+        { intervals: [80] }
+      )
+      .toBe(true);
+    const handleBounds = await handle.boundingBox();
+    if (!handleBounds) throw new Error('Dashboard drag handle has no bounds.');
+    await window.mouse.move(
+      handleBounds.x + handleBounds.width / 2,
+      handleBounds.y + handleBounds.height / 2
+    );
+    await window.mouse.down();
+    await window.mouse.move(
+      handleBounds.x + handleBounds.width / 2 + 45,
+      handleBounds.y + handleBounds.height / 2 + 30,
+      { steps: 5 }
+    );
+    await window.mouse.up();
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position
+      )
+      .not.toEqual(originalPosition);
+    const movedPosition = (await readGraph()).graph.nodes.find(
+      (node) => node.id === 'dashboard'
+    )?.position;
+    await expect(undo).toBeEnabled();
+    await undo.click();
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position
+      )
+      .toEqual(originalPosition);
+    await expect(redo).toBeEnabled();
+    await redo.click();
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position
+      )
+      .toEqual(movedPosition);
+
+    await tools.getByRole('button', { name: 'Connections', exact: true }).click();
+    const editor = canvas.getByRole('form', { name: 'Prototype connection editor' });
+    await editor.getByLabel('Connection', { exact: true }).selectOption(originalConnection.id);
+    const destination = editor.getByLabel('Connection destination', { exact: true });
+    const beforeInvalid = await readGraph();
+    await destination.selectOption('');
+    await editor.getByRole('button', { name: 'Save connection', exact: true }).click();
+    await expect(editor.getByRole('alert')).toContainText(
+      'Navigation needs a screen or page destination.'
+    );
+    expect(await readGraph()).toEqual(beforeInvalid);
+    await expect(undo).toBeEnabled();
+    await destination.selectOption('orders');
+    await window.bringToFront();
+    await destination.focus();
+    await expect(destination).toBeFocused();
+    await window.keyboard.press('d');
+    await expect(destination).toHaveValue('dashboard');
+    const saveConnection = editor.getByRole('button', { name: 'Save connection', exact: true });
+    await saveConnection.focus();
+    await window.keyboard.press('Enter');
+    const target = async () => {
+      const transition = (await readGraph()).graph.transitions.find(
+        (item) => item.id === originalConnection.id
+      );
+      return transition && 'to' in transition ? transition.to.nodeId : undefined;
+    };
+    await expect.poll(target).toBe('dashboard');
+    await expect(undo).toBeEnabled();
+    await undo.focus();
+    await window.keyboard.press('Meta+z');
+    await expect.poll(target).toBe('orders');
+    await expect(redo).toBeEnabled();
+    await redo.focus();
+    await window.keyboard.press('Meta+Shift+z');
+    await expect.poll(target).toBe('dashboard');
+    await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
+    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    const edge = canvas.locator(`.react-flow__edge[data-id="${originalConnection.id}"]`);
+    await edge.focus();
+    await window.keyboard.press('Enter');
+    await expect(edge).toHaveClass(/selected/);
+    await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
+    const reconnectAnchor = edge.locator('.react-flow__edgeupdater-target');
+    const ordersTarget = canvas.locator(
+      '.react-flow__node[data-id="orders"] .canvas-artboard__target-handle'
+    );
+    await expect(reconnectAnchor).toBeVisible();
+    await expect(ordersTarget).toBeVisible();
+    await expect(reconnectAnchor).toBeInViewport();
+    await expect(ordersTarget).toBeInViewport();
+    let previousReconnectBounds: Awaited<ReturnType<typeof reconnectAnchor.boundingBox>>;
+    let stableReconnectFrames = 0;
+    await expect
+      .poll(
+        async () => {
+          const bounds = await reconnectAnchor.boundingBox();
+          if (!bounds) return false;
+          const stable =
+            previousReconnectBounds &&
+            Math.abs(bounds.x - previousReconnectBounds.x) < 0.5 &&
+            Math.abs(bounds.y - previousReconnectBounds.y) < 0.5;
+          stableReconnectFrames = stable ? stableReconnectFrames + 1 : 0;
+          previousReconnectBounds = bounds;
+          return stableReconnectFrames >= 3;
+        },
+        { intervals: [80] }
+      )
+      .toBe(true);
+    const reconnectBounds = await reconnectAnchor.boundingBox();
+    const targetBounds = await ordersTarget.boundingBox();
+    if (!reconnectBounds || !targetBounds)
+      throw new Error('Connection handles need physical bounds.');
+    await testInfo.attach('integrated-flow-reconnection-geometry.json', {
+      body: JSON.stringify(
+        await window.evaluate(
+          ({ reconnectBounds: anchorRect, targetBounds: destinationRect }) =>
+            [anchorRect, destinationRect].map((bounds) => {
+              const hit = document.elementFromPoint(
+                bounds.x + bounds.width / 2,
+                bounds.y + bounds.height / 2
+              );
+              return { bounds, hit: hit?.outerHTML.slice(0, 500) };
+            }),
+          { reconnectBounds, targetBounds }
+        ),
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    await window.mouse.move(
+      reconnectBounds.x + reconnectBounds.width / 2,
+      reconnectBounds.y + reconnectBounds.height / 2
+    );
+    await window.mouse.down();
+    await window.mouse.move(
+      targetBounds.x + targetBounds.width / 2,
+      targetBounds.y + targetBounds.height / 2,
+      { steps: 8 }
+    );
+    await window.mouse.up();
+    await expect.poll(target).toBe('orders');
+    await undo.click();
+    await expect.poll(target).toBe('dashboard');
+    await redo.click();
+    await expect.poll(target).toBe('orders');
+
+    await tools.getByRole('button', { name: 'Connections', exact: true }).click();
+    await editor.getByLabel('Connection', { exact: true }).selectOption(originalConnection.id);
+    await editor.getByRole('button', { name: 'Delete connection', exact: true }).click();
+    await expect.poll(target).toBeUndefined();
+    await undo.click();
+    await expect.poll(target).toBe('orders');
+    await redo.click();
+    await expect.poll(target).toBeUndefined();
+    await undo.click();
+    await expect.poll(target).toBe('orders');
+    const saved = await readGraph();
+    expect(saved.revision).toBeGreaterThan(before.revision);
+    expect(
+      await window.evaluate(
+        async () => (await window.selene.designer.snapshot()).source.revision.id
+      )
+    ).toBe(originalSourceRevision);
+    const historyEvidence = testInfo.outputPath('integrated-flow-history.json');
+    await writeFile(
+      historyEvidence,
+      JSON.stringify(
+        { before, saved, originalSourceRevision, originalPosition, movedPosition },
+        null,
+        2
+      )
+    );
+    await testInfo.attach('integrated-flow-history.json', {
+      path: historyEvidence,
+      contentType: 'application/json'
+    });
+    const wideScreenshot = testInfo.outputPath('integrated-flow-history-wide.png');
+    await window.screenshot({ path: wideScreenshot });
+    await testInfo.attach('integrated-flow-history-wide.png', {
+      path: wideScreenshot,
+      contentType: 'image/png'
+    });
+    await window.reload();
+    await expect(canvas).toBeVisible();
+    const reloaded = await readGraph();
+    expect(reloaded.graph).toEqual(saved.graph);
+    expect(reloaded.revision).toBe(saved.revision);
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    await window.setViewportSize({ width: 620, height: 760 });
+    await tools.getByRole('button', { name: 'Connections', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await expect(editor).toBeInViewport();
+    const compactScreenshot = testInfo.outputPath('integrated-flow-history-compact.png');
+    await window.screenshot({ path: compactScreenshot });
+    await testInfo.attach('integrated-flow-history-compact.png', {
+      path: compactScreenshot,
+      contentType: 'image/png'
+    });
+  } finally {
+    await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

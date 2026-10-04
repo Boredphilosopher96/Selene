@@ -2503,51 +2503,6 @@ export function createCollaborationService(
           })
         );
       }
-      if (request.method === 'POST' && url.pathname === '/v1/import') {
-        const snapshot = await readSnapshot(request, maximumSnapshotBytes);
-        const existing = await repository<Project | undefined>(request, 'getProject', [
-          snapshot.project.id
-        ]);
-        const userId = await requireUserAuthorization(
-          request,
-          existing ? 'project:design' : 'organization:create-project',
-          existing
-            ? { projectId: snapshot.project.id }
-            : { organizationId: snapshot.project.organizationId }
-        );
-        const result = await idempotent(
-          options.repository,
-          `import:${userId}:${snapshot.project.id}`,
-          request.headers.get('idempotency-key') ?? undefined,
-          async () => {
-            await repository<void>(request, 'replaceProject', [
-              snapshot,
-              {
-                ...(request.headers.get('x-selene-expected-revision-id') === null
-                  ? {}
-                  : {
-                      expectedLatestRevisionId: request.headers.get(
-                        'x-selene-expected-revision-id'
-                      )!
-                    }),
-                context: contextFor(request)
-              }
-            ]);
-            await emit(
-              request,
-              snapshot.project.id,
-              'project.imported',
-              userId,
-              'project',
-              snapshot.project.id,
-              {}
-            );
-            return { projectId: snapshot.project.id, imported: true };
-          },
-          contextFor(request)
-        );
-        return cors(request, json(result, 201));
-      }
       if (request.method === 'POST' && url.pathname === '/v1/sync') {
         const snapshot = await readSnapshot(request, maximumSnapshotBytes);
         const existing = await repository<

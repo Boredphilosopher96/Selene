@@ -98,6 +98,7 @@ export interface DesignSystemCatalogPolicy {
   readonly provider: {
     readonly label: string;
     readonly fixture?: 'demo-only-local-catalog';
+    fixtureFor?(input: { readonly name: string; readonly version: string }): string | undefined;
     supports(input: { readonly name: string; readonly version: string }): boolean;
   };
 }
@@ -1085,6 +1086,9 @@ export class DesktopDesignSystemIntake {
       packageRequest.name,
       packageRequest.version
     );
+    const fixtureLabel = this.policy.provider.fixture
+      ? this.policy.provider.label
+      : this.policy.provider.fixtureFor?.(packageRequest);
     const staged = {
       status: 'staged',
       packageName: packageRequest.name,
@@ -1094,7 +1098,7 @@ export class DesktopDesignSystemIntake {
       provenance: receipt.provenance,
       artifactDigest: receipt.artifactDigest,
       ...(receipt.catalog === undefined ? {} : { catalog: receipt.catalog }),
-      ...(this.policy.provider.fixture ? { fixture: this.policy.provider.label } : {})
+      ...(fixtureLabel === undefined ? {} : { fixture: fixtureLabel })
     } satisfies DesignSystemReceipt;
     if (receipt.compilerModules !== undefined) this.compilerStaging?.stage(receipt.compilerModules);
     return staged;

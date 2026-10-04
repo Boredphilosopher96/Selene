@@ -28,6 +28,7 @@ import {
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import {
   DesktopDesignerApplicationService,
+  createInitialWorkspace,
   DeterministicDesignerFixtureAdapter,
   InMemoryDesignLanguageGuidancePort,
   type ComponentCatalogManifestPort,
@@ -37,9 +38,20 @@ import {
   type DesignerAgentAdapter
 } from './designer-service';
 import { digestReactBuildOutput } from './react-build-output-digest';
-import type { ManualReactEditTransactionPort } from './manual-react-edit-transaction';
+import {
+  CompilerBoundManualReactEditTransactionPort,
+  UnavailableManualReactEditTransactionPort,
+  type ManualReactEditTransactionPort
+} from './manual-react-edit-transaction';
+import { ViteReactCompilerPort } from './react-compiler';
+import { LifecyclePrototypeGraphPersistencePort } from './lifecycle-prototype-graph';
 import type { CrashDiagnosticSink } from './crash-diagnostics';
 import { desktopDesignInputRuntime } from './design-input-runtime';
+import {
+  BunViteReactGeneratedProjectTemplate,
+  type GeneratedProjectTemplatePort
+} from './generated-project-template';
+import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
 import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
 import type { SpatialTargetInput } from '../shared/designer-api';
@@ -411,6 +423,7 @@ function fixtureService(
     readonly manualEditTransaction?: ManualReactEditTransactionPort;
     readonly componentCatalogManifests?: ComponentCatalogManifestPort;
     readonly storyPreviews?: StoryPreviewCapabilityPort;
+    readonly projectTemplate?: GeneratedProjectTemplatePort;
   } = {}
 ): DesktopDesignerApplicationService {
   return new DesktopDesignerApplicationService(
@@ -422,7 +435,7 @@ function fixtureService(
     undefined,
     undefined,
     options.projectState,
-    undefined,
+    options.projectTemplate,
     undefined,
     options.guidance ?? new InMemoryDesignLanguageGuidancePort(),
     options.manualEditTransaction ?? {
@@ -1816,15 +1829,15 @@ describe('desktop designer application service', () => {
 
   it('inserts only an exact approved component into a mapped flex or grid container', async () => {
     const service = fixtureService();
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
     const { workspace, nodeId } = textCapabilityFixture(
       service,
       'Orders',
       'display: "flex", gap: "12px"'
     );
-    const receipt = await service.inspectDesignSystem({
-      name: '@selene/design-tokens',
-      version: '1.0.0'
-    });
     const component = {
       packageName: receipt.packageName,
       version: receipt.version,
@@ -1923,11 +1936,11 @@ describe('desktop designer application service', () => {
     ).resolves.toEqual({ kind: 'unavailable', code: 'MANUAL_EDIT_UNAVAILABLE' });
 
     const unsupported = fixtureService();
-    const unsupportedFixture = textCapabilityFixture(unsupported, 'Orders');
     const unsupportedReceipt = await unsupported.inspectDesignSystem({
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
+    const unsupportedFixture = textCapabilityFixture(unsupported, 'Orders');
     const unsupportedSelected = unsupported.selectNode(unsupportedFixture.nodeId);
     expect(unsupportedSelected.catalogInsertTarget).toBeUndefined();
     expect(unsupportedSelected.catalogReplaceTarget).toEqual({
@@ -1956,11 +1969,11 @@ describe('desktop designer application service', () => {
         () => true
       )
     });
-    const fixture = textCapabilityFixture(service);
     await service.inspectDesignSystem({
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
+    const fixture = textCapabilityFixture(service);
     const ids = {
       sourceStack: 'source:source-stack',
       selected: 'source:selected-button',
@@ -2058,11 +2071,11 @@ export default function App(){return <main data-selene-node-id="source:root">
 
   it('replaces a mapped element only through an exact approved component capability', async () => {
     const service = fixtureService();
-    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
     const receipt = await service.inspectDesignSystem({
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
+    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
     const component = {
       packageName: receipt.packageName,
       version: receipt.version,
@@ -2129,11 +2142,11 @@ export default function App(){return <main data-selene-node-id="source:root">
 
   it('edits only declared props on the exact selected imported design-system component', async () => {
     const service = fixtureService();
-    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
     const receipt = await service.inspectDesignSystem({
       name: '@selene/design-tokens',
       version: '1.0.0'
     });
+    const { workspace, nodeId } = textCapabilityFixture(service, 'Orders');
     const state = service as unknown as { source: ReactSourceWorkspace };
     state.source = {
       ...workspace,
@@ -2807,6 +2820,440 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
         revisionId: 'stale-revision'
       })
     ).resolves.toEqual({ kind: 'unavailable', code: 'STALE_SELECTION' });
+  });
+
+  it('persists multi-level manual undo and redo, rejects stale replay and abandons the old redo branch', async () => {
+    const storage = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage.storage);
+    const initial = freshWorkspace();
+    const workspace: ReactSourceWorkspace = {
+      ...initial,
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx',
+          content:
+            'export default function App(){return <main data-selene-node-id="designer.root"><h1 data-selene-node-id="designer.title">Orders</h1></main>;}'
+        }
+      ],
+      nodes: initial.nodes.filter((node) =>
+        ['designer.root', 'designer.title'].includes(node.nodeId)
+      )
+    };
+    await lifecycle.create({
+      id: workspace.projectId,
+      name: 'History',
+      origin: 'created',
+      workspace
+    });
+    const compiler = new ViteReactCompilerPort();
+    const create = async () => {
+      const service = fixtureService({
+        projectState: lifecycle,
+        manualEditTransaction: new UnavailableManualReactEditTransactionPort()
+      });
+      service.registerAgent(new DeterministicDesignerFixtureAdapter());
+      service.bindManualEditTransaction(
+        new CompilerBoundManualReactEditTransactionPort(
+          compiler,
+          service.createManualEditPersistencePort()
+        )
+      );
+      await service.openProjectWorkspace((await lifecycle.open(workspace.projectId)).current);
+      await service.activateReactBindingReceipt(await compiler.compile(service.snapshot().source));
+      return service;
+    };
+    let service = await create();
+    const edit = async (content: string) => {
+      const current = service.snapshot().source;
+      const capability = await service.requestManualTextEditCapability({
+        projectId: current.projectId,
+        nodeId: 'designer.title',
+        revisionId: current.revision.id
+      });
+      if (capability.kind !== 'available') throw new Error('Text edit unavailable');
+      const result = await service.applyManualTextEdit({
+        format: 'selene-desktop-manual-text-edit-apply/v1',
+        projectId: current.projectId,
+        capabilityId: capability.capabilityId,
+        content
+      });
+      expect(result.kind).toBe('applied');
+      await service.activateReactBindingReceipt(await compiler.compile(service.snapshot().source));
+      return service.snapshot().source;
+    };
+    const identity = (operation: 'undo' | 'redo') => {
+      const snapshot = service.snapshot();
+      const capability = snapshot.designActivity.find((entry) => entry[operation]?.available)?.[
+        operation
+      ];
+      if (capability === undefined) throw new Error(`${operation} unavailable`);
+      return {
+        projectId: workspace.projectId,
+        undoId: capability.undoId,
+        targetRevisionId: capability.targetRevisionId,
+        currentRevisionId: snapshot.source.revision.id
+      };
+    };
+    const first = await edit('First');
+    const second = await edit('Second');
+    const stale = identity('undo');
+    await service.undoLatestManualDesignEdit(stale);
+    expect(service.snapshot().source.files).toEqual(first.files);
+    await expect(service.undoLatestManualDesignEdit(stale)).rejects.toThrow(/current undo entry/);
+    await service.undoLatestManualDesignEdit(identity('undo'));
+    expect(service.snapshot().source.files).toEqual(workspace.files);
+    // Actual lifecycle decoding must retain both checkpoints and the compiled authority.
+    service = await create();
+    await service.redoLatestManualDesignEdit(identity('redo'));
+    expect(service.snapshot().source.files).toEqual(first.files);
+    const redo = identity('redo');
+    const beforeFailure = service.snapshot();
+    storage.failNextCommit();
+    await expect(service.redoLatestManualDesignEdit(redo)).rejects.toThrow(
+      'fixture lifecycle commit failed'
+    );
+    expect(service.snapshot()).toEqual(beforeFailure);
+    expect((await lifecycle.open(workspace.projectId)).current.files).toEqual(first.files);
+    await service.redoLatestManualDesignEdit(redo);
+    expect(service.snapshot().source.files).toEqual(second.files);
+    await expect(service.redoLatestManualDesignEdit(redo)).rejects.toThrow(/current redo entry/);
+    await service.undoLatestManualDesignEdit(identity('undo'));
+    await edit('New branch');
+    expect(service.snapshot().designActivity.some((entry) => entry.redo?.available)).toBe(false);
+    service = await create();
+    expect(service.snapshot().designActivity.some((entry) => entry.redo?.available)).toBe(false);
+    expect(service.snapshot().source.files[0]?.content).toContain('New branch');
+  });
+
+  it('duplicates a static subtree through one-use authority, then durably undoes and redoes the copy', async () => {
+    const lifecycle = new LocalProjectLifecycleService(createInMemoryProjectLifecycleStorage());
+    const initial = freshWorkspace();
+    const workspace: ReactSourceWorkspace = {
+      ...initial,
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx',
+          content:
+            'export default function App(){return <main data-selene-node-id="designer.root" style={{display:"flex"}}><section data-selene-node-id="designer.title"><span data-selene-node-id="designer.copy-child">Orders</span></section></main>;}'
+        }
+      ],
+      nodes: ['designer.root', 'designer.title', 'designer.copy-child'].map((nodeId) => ({
+        nodeId,
+        path: 'src/App.tsx',
+        exportName: 'default'
+      }))
+    };
+    await lifecycle.create({
+      id: workspace.projectId,
+      name: 'Duplicate',
+      origin: 'created',
+      workspace
+    });
+    const compiler = new ViteReactCompilerPort();
+    const service = fixtureService({
+      projectState: lifecycle,
+      graphPersistence: new LifecyclePrototypeGraphPersistencePort(
+        lifecycle,
+        fixtureGraphPersistence()
+      ),
+      manualEditTransaction: new UnavailableManualReactEditTransactionPort()
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    service.bindManualEditTransaction(
+      new CompilerBoundManualReactEditTransactionPort(
+        compiler,
+        service.createManualEditPersistencePort()
+      )
+    );
+    await service.openProjectWorkspace(workspace);
+    await service.activateReactBindingReceipt(await compiler.compile(workspace));
+    const capability = await service.requestManualElementDuplicateCapability({
+      projectId: workspace.projectId,
+      nodeId: 'designer.title',
+      revisionId: workspace.revision.id
+    });
+    if (capability.kind !== 'available') throw new Error('Duplicate capability unavailable');
+    const request = {
+      format: 'selene-desktop-manual-element-duplicate-apply/v1' as const,
+      projectId: workspace.projectId,
+      capabilityId: capability.capabilityId
+    };
+    await expect(
+      service.applyManualElementDuplicate({ ...request, sourceAnchorRemaps: [] })
+    ).resolves.toMatchObject({ kind: 'rejected', diagnostics: [{ code: 'INVALID_REQUEST' }] });
+    await expect(service.applyManualElementDuplicate(request)).resolves.toMatchObject({
+      kind: 'applied'
+    });
+    await expect(service.applyManualElementDuplicate(request)).resolves.toMatchObject({
+      kind: 'rejected',
+      diagnostics: [{ code: 'CAPABILITY_CONSUMED' }]
+    });
+    const copied = service.snapshot().source;
+    expect(copied.nodes).toHaveLength(5);
+    expect(new Set(copied.nodes.map((node) => node.nodeId)).size).toBe(5);
+    expect(copied.files[0]?.content.match(/Orders/g)).toHaveLength(2);
+    expect((await lifecycle.open(workspace.projectId)).current).toEqual(copied);
+    expect(service.snapshot().designActivity.at(-1)).toMatchObject({
+      kind: 'duplicate',
+      label: 'Duplicated React element'
+    });
+    const intent = (operation: 'undo' | 'redo') => {
+      const current = service.snapshot();
+      const historyCapability = current.designActivity.find(
+        (entry) => entry[operation]?.available
+      )?.[operation];
+      if (historyCapability === undefined) throw new Error(`${operation} unavailable`);
+      return {
+        projectId: workspace.projectId,
+        undoId: historyCapability.undoId,
+        targetRevisionId: historyCapability.targetRevisionId,
+        currentRevisionId: current.source.revision.id
+      };
+    };
+    await service.undoLatestManualDesignEdit(intent('undo'));
+    expect(service.snapshot().source.files).toEqual(workspace.files);
+    expect(service.snapshot().source.nodes).toEqual(workspace.nodes);
+    await service.redoLatestManualDesignEdit(intent('redo'));
+    expect(service.snapshot().source.files).toEqual(copied.files);
+    expect(service.snapshot().source.nodes).toEqual(copied.nodes);
+    const graph = service.snapshot().editablePrototype.graph;
+    await service.savePrototypeGraph({
+      ...graph,
+      nodes: graph.nodes.map((node, index) =>
+        index === 0 ? { ...node, position: { x: node.position.x + 10, y: node.position.y } } : node
+      )
+    });
+    expect(service.snapshot().designActivity).toContainEqual(
+      expect.objectContaining({
+        kind: 'duplicate',
+        undo: expect.objectContaining({ available: false, disabledReason: 'SOURCE_CHANGED' })
+      })
+    );
+    const state = await lifecycle.designerState(workspace.projectId);
+    expect(state?.manualReactEditJournal).toBeUndefined();
+    expect(state?.archivedManualReactEditJournal).toHaveLength(1);
+    const restarted = fixtureService({ projectState: lifecycle });
+    restarted.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await restarted.openProjectWorkspace((await lifecycle.open(workspace.projectId)).current);
+    expect(restarted.snapshot().designActivity.some((entry) => entry.kind === 'duplicate')).toBe(
+      true
+    );
+    expect(
+      restarted
+        .snapshot()
+        .designActivity.some((entry) => entry.undo?.available || entry.redo?.available)
+    ).toBe(false);
+  });
+
+  it('marks recovered flow baselines stale only after the atomic recovery commit succeeds', async () => {
+    const storage = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage.storage);
+    const workspace = freshWorkspace();
+    await lifecycle.create({
+      id: workspace.projectId,
+      name: 'Recovery',
+      origin: 'created',
+      workspace
+    });
+    const persistence = new LifecyclePrototypeGraphPersistencePort(
+      lifecycle,
+      fixtureGraphPersistence()
+    );
+    let unavailable = false;
+    const service = fixtureService({
+      projectState: lifecycle,
+      graphPersistence: {
+        commitsDesignerState: true,
+        read: (projectId) =>
+          unavailable
+            ? Promise.reject(new Error('corrupt saved graph'))
+            : persistence.read(projectId),
+        compareAndSwap: (...args) => persistence.compareAndSwap(...args),
+        recoverFromFixture: (...args) => persistence.recoverFromFixture(...args)
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(workspace);
+    await service.markReadyForReview();
+    unavailable = true;
+    await service.retryPrototypeGraphHydration();
+    const before = service.snapshot();
+    const durableBefore = await lifecycle.designerState(workspace.projectId);
+    expect(before.prototypeGraphHydration.state).toBe('recovery-required');
+    storage.failNextCommit();
+    await expect(service.recoverPrototypeGraphFromFixture()).rejects.toThrow(
+      'fixture lifecycle commit failed'
+    );
+    expect(service.snapshot()).toEqual(before);
+    expect(await lifecycle.designerState(workspace.projectId)).toEqual(durableBefore);
+    const recovered = await service.recoverPrototypeGraphFromFixture();
+    expect(recovered.prototypeGraphHydration.state).toBe('persisted');
+    expect(recovered.baseline).toMatchObject({
+      currency: 'stale',
+      approvalsStale: true,
+      changesSinceBaseline: [
+        { kind: 'flow', reason: 'Recovered the prototype flow after saved graph corruption.' }
+      ]
+    });
+    expect((await lifecycle.designerState(workspace.projectId))?.baseline).toEqual(
+      recovered.baseline
+    );
+  });
+
+  it('tracks design input changes atomically, preserves no-op baselines and rolls back failed persistence', async () => {
+    const storage = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage.storage);
+    const workspace = freshWorkspace();
+    await lifecycle.create({
+      id: workspace.projectId,
+      name: 'Inputs',
+      origin: 'created',
+      workspace
+    });
+    const service = fixtureService({ projectState: lifecycle });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(workspace);
+    await service.markReadyForHandoff();
+    const receipt = await service.inspectDesignSystem({
+      name: '@selene/design-tokens',
+      version: '1.0.0'
+    });
+    const input = { id: receipt.artifactDigest, enabled: true };
+    const changed = service.snapshot();
+    expect(changed.baseline).toMatchObject({
+      currency: 'stale',
+      approvalsStale: true,
+      changesSinceBaseline: [{ kind: 'design-system' }]
+    });
+    await service.setDesignSystemInputs({ inputs: [input] });
+    expect(service.snapshot().baseline).toEqual(changed.baseline);
+    const beforeFailure = service.snapshot();
+    storage.failNextCommit();
+    await expect(
+      service.setDesignSystemInputs({ inputs: [{ ...input, enabled: false }] })
+    ).rejects.toThrow('fixture lifecycle commit failed');
+    expect(service.snapshot()).toEqual(beforeFailure);
+    expect((await lifecycle.designerState(workspace.projectId))?.baseline).toEqual(
+      changed.baseline
+    );
+    await service.setDesignSystemInputs({ inputs: [{ ...input, enabled: false }] });
+    expect(service.snapshot().baseline.changesSinceBaseline.map((change) => change.kind)).toEqual([
+      'design-system',
+      'design-system'
+    ]);
+    const restarted = fixtureService({ projectState: lifecycle });
+    restarted.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await restarted.openProjectWorkspace((await lifecycle.open(workspace.projectId)).current);
+    expect(restarted.snapshot().baseline).toEqual(service.snapshot().baseline);
+    const staged = await service.requestAIChange({
+      kind: 'general',
+      agentId: 'fixture-designer',
+      instruction: 'Update the review copy.'
+    });
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Missing compiled proposal');
+    const durable = await lifecycle.designerState(workspace.projectId);
+    if (durable?.pendingAIProposal?.compileEvidence === undefined)
+      throw new Error('Missing durable compiler evidence');
+    await expect(
+      lifecycle.saveDesignerState(workspace.projectId, {
+        ...durable,
+        pendingAIProposal: {
+          ...durable.pendingAIProposal,
+          compileEvidence: {
+            ...durable.pendingAIProposal.compileEvidence,
+            sourceDigest: '0'.repeat(64)
+          }
+        }
+      })
+    ).rejects.toThrow('pending AI compilation evidence is stale');
+    await expect(service.setDesignSystemInputs({ inputs: [input] })).rejects.toThrow(
+      'Finish the AI change'
+    );
+    expect(service.snapshot()).toEqual(staged);
+    await service.rejectPendingAIProposal({
+      projectId: workspace.projectId,
+      requestId: pending.requestId,
+      candidateRevisionId: pending.candidateRevisionId
+    });
+  });
+
+  it('atomically commits flow revisions and baseline deltas, rejects stale saves and preserves both after failure', async () => {
+    const storage = countingStorage();
+    const lifecycle = new LocalProjectLifecycleService(storage.storage);
+    const workspace = freshWorkspace();
+    await lifecycle.create({
+      id: workspace.projectId,
+      name: 'Flows',
+      origin: 'created',
+      workspace
+    });
+    const legacy = fixtureGraphPersistence();
+    const graphs = new LifecyclePrototypeGraphPersistencePort(lifecycle, legacy);
+    const service = fixtureService({ projectState: lifecycle, graphPersistence: graphs });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(workspace);
+    await service.markReadyForReview();
+    const before = service.snapshot();
+    const graph = before.editablePrototype.graph;
+    const staleState = await lifecycle.designerState(workspace.projectId);
+    if (staleState === undefined) throw new Error('Missing persisted baseline');
+    const moved = {
+      ...graph,
+      nodes: graph.nodes.map((node, index) =>
+        index === 0
+          ? { ...node, position: { x: node.position.x + 40, y: node.position.y + 20 } }
+          : node
+      )
+    };
+    await service.savePrototypeGraph(moved);
+    const applied = service.snapshot();
+    expect(applied.editablePrototype.revision).toBe(1);
+    expect(applied.editablePrototype.graph).toEqual(moved);
+    expect(applied.baseline).toMatchObject({
+      currency: 'stale',
+      approvalsStale: true,
+      changesSinceBaseline: [{ kind: 'flow' }]
+    });
+    expect((await lifecycle.designerState(workspace.projectId))?.prototypeGraph).toEqual({
+      revision: 1,
+      graph: moved
+    });
+    await expect(
+      lifecycle.saveDesignerState(workspace.projectId, staleState)
+    ).rejects.toMatchObject({ code: 'GRAPH_CONFLICT' });
+    await expect(
+      lifecycle.saveDesignerStateWithGuidance(workspace.projectId, staleState, [])
+    ).rejects.toMatchObject({ code: 'GRAPH_CONFLICT' });
+    expect((await lifecycle.designerState(workspace.projectId))?.prototypeGraph).toEqual({
+      revision: 1,
+      graph: moved
+    });
+    storage.failNextCommit();
+    await expect(service.savePrototypeGraph(graph)).rejects.toThrow(
+      'fixture lifecycle commit failed'
+    );
+    expect(service.snapshot()).toEqual(applied);
+    const restarted = fixtureService({
+      projectState: lifecycle,
+      graphPersistence: new LifecyclePrototypeGraphPersistencePort(lifecycle, legacy)
+    });
+    restarted.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await restarted.openProjectWorkspace((await lifecycle.open(workspace.projectId)).current);
+    expect(restarted.snapshot().editablePrototype.graph).toEqual(moved);
+    expect(restarted.snapshot().baseline).toEqual(applied.baseline);
+    await restarted.savePrototypeGraph(moved);
+    expect(restarted.snapshot().baseline.changesSinceBaseline).toHaveLength(1);
+    await expect(
+      graphs.compareAndSwap(
+        workspace.projectId,
+        1,
+        graph,
+        await lifecycle.designerState(workspace.projectId)
+      )
+    ).rejects.toMatchObject({ code: 'GRAPH_CONFLICT' });
   });
 
   it('rejects expired and stale grants without evaluating a transaction and clears grants on project switch', async () => {
@@ -4116,6 +4563,35 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     ]);
   });
 
+  it('publishes an arbitrary project without unrelated Orders acceptance scenarios', async () => {
+    const template = new BunViteReactGeneratedProjectTemplate(
+      createEmbeddedGeneratedProjectToolchainPort()
+    );
+    let handoff: string | undefined;
+    const service = fixtureService({
+      projectTemplate: {
+        id: template.id,
+        version: template.version,
+        create(bundle) {
+          const plan = template.create(bundle);
+          handoff = plan.files.find((file) => file.path === 'selene/review-seed.json')?.content;
+          return plan;
+        }
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    await service.openProjectWorkspace(createInitialWorkspace('travel-ui'));
+    await expect(
+      service.requestGeneratedCodePublishConsent({ mode: 'local-preview', title: 'Travel UI' })
+    ).resolves.toHaveProperty('consentId');
+    if (handoff === undefined) throw new Error('Generated handoff was not produced.');
+    const published = JSON.parse(handoff).handoff;
+    expect(published.project.id).toBe('travel-ui');
+    expect(published.scenarios).toEqual([]);
+    expect(handoff).not.toContain('owner-loading-desktop');
+    expect(handoff).not.toContain('Owner loading dashboard');
+  });
+
   it('generates only enabled package inputs in the configured order', async () => {
     const service = fixtureService({
       intake: fixtureDesignSystemIntake(catalogFixturePort(), () => true)
@@ -4339,7 +4815,13 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(staged.aiChangeRequests).toMatchObject([{ status: 'reviewing' }]);
     expect(staged.pendingAIProposal).toMatchObject({
       requestId: staged.aiChangeRequests[0]?.id,
-      baseRevisionId: 'desktop-designer-r1'
+      baseRevisionId: 'desktop-designer-r1',
+      review: {
+        coverage: { complete: true },
+        checks: expect.arrayContaining([
+          { id: 'compilation', status: 'passed', description: expect.any(String) }
+        ])
+      }
     });
     const pending = staged.pendingAIProposal;
     if (pending === undefined) throw new Error('Compiled proposal was not staged.');
@@ -4504,7 +4986,11 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(undone.developerAnnotations.some((item) => item.body === 'Keep this direction.')).toBe(
       true
     );
-    expect(undone.baseline.changesSinceBaseline).toHaveLength(2);
+    expect(undone.baseline.changesSinceBaseline.map((change) => change.kind)).toEqual([
+      'source',
+      'direction',
+      'source'
+    ]);
     const canonical = collaboration.collaboration.aiChangeRequests.find(
       (item) => item.id === request.id
     );

@@ -25,6 +25,11 @@ import {
   GeneratedProjectCommandError,
   type GeneratedProjectLockPort
 } from './generated-project-lock';
+import {
+  generatedProjectPublicationOutputs,
+  preparedStaticReviewStatus,
+  validateGeneratedProjectPublication
+} from './github-publish-project';
 
 const homebrewPrefixes = Object.freeze(['/opt/homebrew', '/usr/local']);
 const maximumExecutableBytes = 512 * 1024 * 1024;
@@ -83,6 +88,23 @@ export interface GitHubRefRecord {
   readonly ref: string;
   readonly object: { readonly sha: string; readonly type: 'commit'; readonly url: string };
 }
+export type GitHubProjectPublishTransport = Pick<
+  HomebrewGitHubCliTransport,
+  | 'setup'
+  | 'readRepository'
+  | 'createRepository'
+  | 'createBlob'
+  | 'createTree'
+  | 'createCommit'
+  | 'readCommit'
+  | 'readRecursiveTree'
+  | 'readBlob'
+  | 'readRef'
+  | 'listHeads'
+  | 'createRef'
+  | 'readPullRequest'
+  | 'createDraftPullRequest'
+>;
 
 interface ExecutableAttestation {
   readonly path: string;
@@ -1255,7 +1277,7 @@ function parseOwnershipMarker(bytes: Buffer): { readonly projectId: string } {
       'artifactDigest,bundleDigest,filePlanDigest,format,lockDigest,projectId' ||
     value.format !== 'selene-generated-project-ownership/v1' ||
     typeof value.projectId !== 'string' ||
-    !/^[a-z][a-z0-9-]{0,63}$/.test(value.projectId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.projectId) ||
     !['artifactDigest', 'bundleDigest', 'filePlanDigest', 'lockDigest'].every(
       (key) => typeof value[key] === 'string' && /^[a-f0-9]{64}$/.test(value[key] as string)
     )
@@ -1267,9 +1289,18 @@ function branchFor(
   request: Extract<GeneratedCodePublishRequest, { readonly mode: 'github-remote' }>
 ): string {
   const project = request.bundle.projectId;
-  if (!/^[a-z][a-z0-9-]{0,63}$/.test(project))
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(project))
     throw hostError('INTEGRITY', 'Publish project ID is invalid.');
-  return 'selene/publish/' + project + '-' + request.bundle.bundleDigest.slice(0, 16);
+  if (/^[a-z][a-z0-9-]{0,63}$/.test(project))
+    return 'selene/publish/' + project + '-' + request.bundle.bundleDigest.slice(0, 16);
+  const slug =
+    project
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, '-')
+      .slice(0, 64)
+      .replace(/-+$/, '') || 'project';
+  const identity = createHash('sha256').update(project).digest('hex').slice(0, 12);
+  return 'selene/publish/' + slug + '-' + identity + '-' + request.bundle.bundleDigest.slice(0, 16);
 }
 function publishTitle(value: string): string {
   if (
@@ -1294,7 +1325,7 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
   public constructor(
     private readonly materializer: GeneratedProjectMaterializationPort,
     private readonly lock: GeneratedProjectLockPort,
-    private readonly github: HomebrewGitHubCliTransport
+    private readonly github: GitHubProjectPublishTransport
   ) {}
   public async publish(
     request: GeneratedCodePublishRequest,
@@ -1307,6 +1338,7 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
     )
       throw hostError('CONFLICT', 'Remote publish did not receive the immutable plan.');
     const title = publishTitle(request.title);
+    validateGeneratedProjectPublication(request.bundle, request.plan);
     const branch = branchFor(request);
     let lease: GeneratedProjectMaterialization | undefined;
     let quarantine: GeneratedProjectQuarantineRecord | undefined;
@@ -1552,14 +1584,18 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
         options.signal
       );
       try {
-        await this.github.createRef(repositoryName, branch, commit.sha, options.signal);
+        await this.github.createRef(repositoryName, 'heads/' + branch, commit.sha, options.signal);
       } catch (error) {
         if (!(error instanceof PublishAdapterError) || error.code !== 'CONFLICT') throw error;
-        const ref = await this.github.readRef(repositoryName, branch, options.signal);
+        const ref = await this.github.readRef(repositoryName, 'heads/' + branch, options.signal);
         if (ref.object.sha !== commit.sha)
           throw hostError('CONFLICT', 'GitHub branch conflicts with immutable publish content.');
       }
-      const verifiedRef = await this.github.readRef(repositoryName, branch, options.signal);
+      const verifiedRef = await this.github.readRef(
+        repositoryName,
+        'heads/' + branch,
+        options.signal
+      );
       const verifiedCommit = await this.github.readCommit(
         repositoryName,
         verifiedRef.object.sha,
@@ -1640,11 +1676,14 @@ export class GitHubGeneratedProjectPublishAdapter implements GeneratedCodePublis
         ref: verifiedRef.ref,
         pullRequestUrl: pullRequest.html_url,
         immutableId: request.bundle.immutableId,
+        generatedOutputs: generatedProjectPublicationOutputs(
+          request.bundle,
+          request.plan,
+          repositoryName,
+          verifiedCommit.sha
+        ),
         hostedReview: Object.freeze({
-          staticReview: Object.freeze({
-            status: 'not-generated' as const,
-            reason: 'STATIC_REVIEW_NOT_GENERATED' as const
-          }),
+          staticReview: preparedStaticReviewStatus(),
           collaboration: Object.freeze({
             status: 'pending' as const,
             reason: 'SYNCHRONIZATION_QUEUED' as const

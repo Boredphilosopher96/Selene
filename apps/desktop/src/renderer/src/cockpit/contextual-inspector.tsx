@@ -39,7 +39,11 @@ import type {
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
   ManualTextEditUnavailable,
+  ManualElementDuplicateApplyRequest,
+  ManualElementDuplicateCapabilityRequest,
   ManualElementRemoveApplyRequest,
+  ManualElementDuplicateCapability,
+  ManualElementDuplicateUnavailable,
   ManualElementRemoveCapability,
   ManualElementRemoveCapabilityRequest,
   ManualElementRemoveUnavailable,
@@ -93,6 +97,12 @@ export interface ManualTextEditorPort {
     input: ManualElementRemoveCapabilityRequest
   ): Promise<ManualElementRemoveCapability | ManualElementRemoveUnavailable>;
   applyManualElementRemove?(input: ManualElementRemoveApplyRequest): Promise<DesignEditResult>;
+  requestManualElementDuplicateCapability?(
+    input: ManualElementDuplicateCapabilityRequest
+  ): Promise<ManualElementDuplicateCapability | ManualElementDuplicateUnavailable>;
+  applyManualElementDuplicate?(
+    input: ManualElementDuplicateApplyRequest
+  ): Promise<DesignEditResult>;
   requestManualLayoutEditCapability(
     input: ManualLayoutEditCapabilityRequest
   ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;

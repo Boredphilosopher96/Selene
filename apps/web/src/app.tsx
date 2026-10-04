@@ -33,6 +33,8 @@ import { PrototypeRuntimePreview } from '@selene/ui/prototype-runtime';
 import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
+import { PublicationReviewPortal } from './publication-review-portal';
+import { ProjectRecoveryPage } from './project-recovery-page';
 import { type ArtifactAnchor } from './hosted-review-collaboration';
 import {
   createHostedElementInspection,
@@ -1991,6 +1993,10 @@ export function HostedReviewPortal({
       </header>
 
       <nav className="review-nav" aria-label="Review sections">
+        {providerInfo.provider === 'hosted' &&
+        hostedReviewConfiguration.serviceUrl !== undefined ? (
+          <a href={`?recoveryProject=${encodeURIComponent(binding.projectId)}`}>Project recovery</a>
+        ) : null}
         {navigation.map((item) => (
           <button
             type="button"
@@ -2618,5 +2624,9 @@ function PrototypeStudio() {
 
 /** The local designer remains the normal web root; hosted review is an explicit route or build. */
 export function App() {
+  if (new URL(window.location.href).searchParams.has('recoveryProject'))
+    return <ProjectRecoveryPage serviceUrl={hostedReviewConfiguration.serviceUrl} />;
+  if (new URL(window.location.href).searchParams.has('publication'))
+    return <PublicationReviewPortal />;
   return isHostedReviewLocation() ? <HostedReviewPortal /> : <DesignerWorkspaceApp />;
 }

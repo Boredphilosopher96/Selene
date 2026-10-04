@@ -43,6 +43,7 @@ import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel'
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
+import { presentCommittedManualEdit } from './manual-edit-presentation';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
 import { artifactSelectionAnchor } from './artifact-selection-anchor';
 import { adjacentThreadId, selectedThreadIndex } from './comment-thread-navigation';
@@ -140,6 +141,7 @@ export interface DesktopCockpitActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+  redoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
   mintArtifactSelectionReceipt(
     request: ArtifactSelectionReceiptRequest
   ): Promise<ArtifactSelectionReceipt>;
@@ -1645,16 +1647,78 @@ export function DesktopCockpit({
           applied: false,
           message: `Element was not removed: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
         };
-      const next = await manualTextEditor.snapshot();
-      onSnapshot(next);
-      onPreviewSelectionClear();
-      await onRender(next);
-      setManualEditStatus('Element removed from React source.');
-      return { applied: true, message: 'Element removed from React source.' };
+      const outcome = await presentCommittedManualEdit({
+        snapshot: () => manualTextEditor.snapshot(),
+        onSnapshot,
+        clearSelection: onPreviewSelectionClear,
+        render: onRender,
+        successMessage: 'Element removed from React source.',
+        refreshFailureMessage:
+          'Element removed from React source. The preview could not refresh; reload to recover it.'
+      });
+      setManualEditStatus(outcome.message);
+      return outcome;
     } catch {
       return {
         applied: false,
         message: 'Element removal could not finish. Refresh and try again.'
+      };
+    }
+  };
+  const duplicateSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    const request = manualTextEditor.requestManualElementDuplicateCapability;
+    const duplicateApply = manualTextEditor.applyManualElementDuplicate;
+    if (!request || !duplicateApply)
+      return {
+        applied: false,
+        message: 'Element duplication is unavailable in this desktop host.'
+      };
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry?.nodeId !== input.nodeId
+    )
+      return { applied: false, message: 'The React selection changed. Select it again.' };
+    try {
+      const capability = await request({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message: 'This element cannot be duplicated safely from React source.'
+        };
+      const result = await duplicateApply({
+        format: 'selene-desktop-manual-element-duplicate-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Element was not duplicated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        };
+      const outcome = await presentCommittedManualEdit({
+        snapshot: () => manualTextEditor.snapshot(),
+        onSnapshot,
+        clearSelection: onPreviewSelectionClear,
+        render: onRender,
+        successMessage: 'Element duplicated from React source.',
+        refreshFailureMessage:
+          'Element duplicated from React source. The preview could not refresh; reload to recover it.'
+      });
+      setManualEditStatus(outcome.message);
+      return outcome;
+    } catch {
+      return {
+        applied: false,
+        message: 'Element duplication could not finish. Refresh and try again.'
       };
     }
   };
@@ -1872,7 +1936,8 @@ export function DesktopCockpit({
               rejectAIProposal: actions.rejectAIProposal,
               cancelAIChange: actions.cancelAIChange,
               undoLastAIChange: actions.undoLastAIChange,
-              undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit
+              undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit,
+              redoLatestManualDesignEdit: actions.redoLatestManualDesignEdit
             }}
             onSnapshot={onSnapshot}
             onRender={onRender}
@@ -2044,6 +2109,7 @@ export function DesktopCockpit({
                 : {})}
               onSelectedElementContextAction={actOnMappedElement}
               onRemoveSelectedElement={removeSelectedElement}
+              onDuplicateSelectedElement={duplicateSelectedElement}
               onCreateArtifactThread={createArtifactThread}
               onBeginSelectedElementTextEdit={beginSelectedElementTextEdit}
               onUpdateSelectedElementText={updateSelectedElementText}

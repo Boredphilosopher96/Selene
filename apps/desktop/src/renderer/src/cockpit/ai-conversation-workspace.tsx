@@ -36,6 +36,7 @@ export interface AIConversationWorkspaceActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+  redoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
 }
 
 export interface AIConversationWorkspaceProps {
@@ -519,7 +520,11 @@ export function AIConversationWorkspace({
       }
     })();
   };
-  const undoManual = (input: ManualDesignUndoInput, activityId: string): void => {
+  const undoManual = (
+    input: ManualDesignUndoInput,
+    activityId: string,
+    operation: 'undo' | 'redo' = 'undo'
+  ): void => {
     if (undoSubmittingRef.current || !input.projectId || conversationBusy) return;
     const token = operationToken.current + 1;
     operationToken.current = token;
@@ -530,18 +535,24 @@ export function AIConversationWorkspace({
     onBusyChange(true);
     void (async () => {
       try {
-        const next = await actions.undoLatestManualDesignEdit(input);
+        const next = await (operation === 'undo'
+          ? actions.undoLatestManualDesignEdit(input)
+          : actions.redoLatestManualDesignEdit(input));
         if (!isCurrent(token, projectId)) return;
         onSnapshot(next);
-        setUndoStatus('Manual change undone. Refreshing the compiled preview…');
+        setUndoStatus(
+          `Manual change ${operation === 'undo' ? 'undone' : 'redone'}. Refreshing the compiled preview…`
+        );
         try {
           await onRender(next);
           if (isCurrent(token, projectId))
-            setUndoStatus('Manual change undone and compiled preview refreshed.');
+            setUndoStatus(
+              `Manual change ${operation === 'undo' ? 'undone' : 'redone'} and compiled preview refreshed.`
+            );
         } catch (error) {
           if (isCurrent(token, projectId))
             setUndoStatus(
-              `Manual undo was saved, but the preview could not refresh. ${presentDesignerError(error, 'preview')}`
+              `Manual ${operation} was saved, but the preview could not refresh. ${presentDesignerError(error, 'preview')}`
             );
         }
       } catch (error) {
@@ -635,6 +646,7 @@ export function AIConversationWorkspace({
               {visibleActivity.map((activity) => {
                 if (activity.origin === 'manual') {
                   const manualUndo = activity.undo;
+                  const manualRedo = activity.redo;
                   const undoEligible = !conversationBusy && manualUndo?.available === true;
                   const manualUndoDisabledReason = conversationBusy
                     ? 'Finish the current design operation before undoing this change.'
@@ -673,7 +685,8 @@ export function AIConversationWorkspace({
                                   {
                                     projectId: snapshot.source.projectId,
                                     undoId: manualUndo.undoId,
-                                    targetRevisionId: manualUndo.targetRevisionId
+                                    targetRevisionId: manualUndo.targetRevisionId,
+                                    currentRevisionId: snapshot.source.revision.id
                                   },
                                   activity.id
                                 )
@@ -681,6 +694,26 @@ export function AIConversationWorkspace({
                             >
                               {undoingRequestId === activity.id ? 'Undoing…' : 'Undo manual change'}
                             </button>
+                            {manualRedo ? (
+                              <button
+                                type="button"
+                                disabled={conversationBusy || !manualRedo.available}
+                                onClick={() =>
+                                  undoManual(
+                                    {
+                                      projectId: snapshot.source.projectId,
+                                      undoId: manualRedo.undoId,
+                                      targetRevisionId: manualRedo.targetRevisionId,
+                                      currentRevisionId: snapshot.source.revision.id
+                                    },
+                                    activity.id,
+                                    'redo'
+                                  )
+                                }
+                              >
+                                Redo manual change
+                              </button>
+                            ) : null}
                             {!undoEligible ? (
                               <p className="conversation-message__disabled-reason">
                                 {manualUndoDisabledReason}
@@ -738,6 +771,16 @@ export function AIConversationWorkspace({
                         requestId: pendingProposal.requestId,
                         candidateRevisionId: pendingProposal.candidateRevisionId
                       };
+                const proposalReview = pendingProposal?.review;
+                const proposalReviewCurrent =
+                  proposalReview?.status === 'current' &&
+                  proposalReview.identity.sourceRevisionId === snapshot.source.revision.id &&
+                  proposalReview.identity.candidateRevisionId ===
+                    pendingProposal?.candidateRevisionId;
+                const proposalAcceptable =
+                  proposalReviewCurrent &&
+                  proposalReview?.coverage.complete &&
+                  !proposalReview.checks.some((check) => check.status === 'failed');
                 return (
                   <li
                     className="conversation-history__item"
@@ -766,6 +809,149 @@ export function AIConversationWorkspace({
                           {requestAgent?.label ?? request.agentId} <strong>{request.status}</strong>
                         </p>
                         <p>{requestOutcome(request)}</p>
+                        {pendingProposal !== undefined ? (
+                          <section aria-label="AI proposal review evidence">
+                            <p>{pendingProposal.summary}</p>
+                            {proposalReview === undefined ? (
+                              <p>
+                                Proposal review evidence is unavailable. Refresh before accepting.
+                              </p>
+                            ) : (
+                              <>
+                                <p>
+                                  Source {proposalReview.identity.sourceRevisionId} → candidate{' '}
+                                  {proposalReview.identity.candidateRevisionId}
+                                </p>
+                                <details>
+                                  <summary>Revision fingerprints</summary>
+                                  <p>
+                                    Source SHA-256:{' '}
+                                    <code>
+                                      {proposalReview.identity.sourceDigest ?? 'Unavailable'}
+                                    </code>
+                                  </p>
+                                  <p>
+                                    Candidate SHA-256:{' '}
+                                    <code>
+                                      {proposalReview.identity.candidateDigest ?? 'Unavailable'}
+                                    </code>
+                                  </p>
+                                </details>
+                                <p>
+                                  {proposalReviewCurrent
+                                    ? `Changed source: ${proposalReview.coverage.totalChangedFiles} file(s); ${proposalReview.coverage.shownFiles} diff(s) shown.`
+                                    : 'Source comparison is unavailable for this proposal identity.'}
+                                </p>
+                                {proposalReview.sourceChanges.map((change) => (
+                                  <details key={change.path}>
+                                    <summary>
+                                      {change.kind}: {change.path}
+                                    </summary>
+                                    <pre style={{ maxHeight: 240, overflow: 'auto' }}>
+                                      <code>{change.diff}</code>
+                                    </pre>
+                                  </details>
+                                ))}
+                                {proposalReview.coverage.omittedFiles > 0 ? (
+                                  <p>
+                                    {proposalReview.coverage.omittedFiles} omitted diff(s):{' '}
+                                    {proposalReview.coverage.omittedPaths.join(', ')}
+                                  </p>
+                                ) : null}
+                                {proposalReview.metadataChanges.entrypoint !== undefined ? (
+                                  <p>
+                                    Entrypoint: {proposalReview.metadataChanges.entrypoint.before} →{' '}
+                                    {proposalReview.metadataChanges.entrypoint.after}
+                                  </p>
+                                ) : null}
+                                {proposalReview.metadataChanges.dependenciesAdded.length > 0 ? (
+                                  <p>
+                                    Added dependencies:{' '}
+                                    {proposalReview.metadataChanges.dependenciesAdded.join(', ')}
+                                  </p>
+                                ) : null}
+                                {proposalReview.metadataChanges.dependenciesRemoved.length > 0 ? (
+                                  <p>
+                                    Removed dependencies:{' '}
+                                    {proposalReview.metadataChanges.dependenciesRemoved.join(', ')}
+                                  </p>
+                                ) : null}
+                                <details>
+                                  <summary>Source mappings and request scope</summary>
+                                  <p>
+                                    Components:{' '}
+                                    {proposalReview.affected.components.length === 0
+                                      ? 'No source mapping available'
+                                      : proposalReview.affected.components
+                                          .map(
+                                            (component) =>
+                                              `${component.path}#${component.exportName}`
+                                          )
+                                          .join(', ')}
+                                  </p>
+                                  <p>
+                                    Source nodes:{' '}
+                                    {proposalReview.affected.sourceNodeIds.join(', ') ||
+                                      'No source mapping available'}
+                                  </p>
+                                  <p>
+                                    Changed node mappings:{' '}
+                                    {proposalReview.metadataChanges.nodeMappingsChanged}
+                                  </p>
+                                  <p>
+                                    Request screen:{' '}
+                                    {proposalReview.affected.screenIds.join(', ') || 'Unknown'}
+                                  </p>
+                                  <p>
+                                    Request scenario:{' '}
+                                    {proposalReview.affected.scenarioIds.join(', ') || 'Unknown'}
+                                  </p>
+                                </details>
+                                <details>
+                                  <summary>Validation coverage</summary>
+                                  <ul>
+                                    {proposalReview.checks.map((check) => (
+                                      <li key={check.id}>
+                                        {check.status}: {check.description}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {proposalReview.compilationEvidence !== undefined ? (
+                                    <>
+                                      <p>
+                                        Compiler: {proposalReview.compilationEvidence.compilerId}
+                                      </p>
+                                      <p>
+                                        Compiled source SHA-256:{' '}
+                                        <code>
+                                          {proposalReview.compilationEvidence.sourceDigest}
+                                        </code>
+                                      </p>
+                                      <p>
+                                        Preview SHA-256:{' '}
+                                        <code>
+                                          {proposalReview.compilationEvidence.previewDigest}
+                                        </code>
+                                      </p>
+                                    </>
+                                  ) : null}
+                                </details>
+                                <ul aria-label="Proposal review warnings">
+                                  {proposalReview.warnings.map((warning) => (
+                                    <li key={warning}>{warning}</li>
+                                  ))}
+                                </ul>
+                                {!proposalAcceptable ? (
+                                  <p>
+                                    Acceptance requires a current, complete source review. Request a
+                                    new proposal when the source is stale or the review limits are
+                                    exceeded.
+                                  </p>
+                                ) : null}
+                              </>
+                            )}
+                          </section>
+                        ) : null}
                         <div
                           className="conversation-message__actions"
                           role="group"
@@ -794,7 +980,7 @@ export function AIConversationWorkspace({
                             <>
                               <button
                                 type="button"
-                                disabled={conversationBusy}
+                                disabled={conversationBusy || !proposalReviewCurrent}
                                 aria-label={`Preview AI proposal: ${request.instruction}`}
                                 onClick={() => previewProposal(proposalInput)}
                               >
@@ -804,7 +990,7 @@ export function AIConversationWorkspace({
                               </button>
                               <button
                                 type="button"
-                                disabled={conversationBusy}
+                                disabled={conversationBusy || !proposalAcceptable}
                                 aria-label={`Accept AI proposal: ${request.instruction}`}
                                 onClick={() => decideProposal('accept', proposalInput)}
                               >

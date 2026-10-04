@@ -112,6 +112,130 @@ const validProposal = (value: unknown) => ({
 });
 
 describe('design edit public contract hostile input fences', () => {
+  it('requires a fenced duplicate inventory with unique fresh descendant identities', () => {
+    const valid = validProposal('Orders');
+    const command = {
+      kind: 'duplicate-node',
+      target: { ...target, parentSourceAnchorId: 'orders.parent' },
+      sourceAnchorRemaps: [
+        { fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.copy' },
+        { fromSourceAnchorId: 'orders.child', toSourceAnchorId: 'orders.copy-child' }
+      ]
+    };
+    const duplicate = {
+      ...valid,
+      commands: [command],
+      preconditions: [
+        ...valid.preconditions,
+        { kind: 'node-exists', sourceAnchorId: 'orders.parent' },
+        { kind: 'node-exists', sourceAnchorId: 'orders.root' },
+        { kind: 'node-exists', sourceAnchorId: 'orders.child' },
+        { kind: 'parent-is', sourceAnchorId: 'orders.root', parentSourceAnchorId: 'orders.parent' }
+      ]
+    };
+    const parsed = parseDesignEditProposal(duplicate);
+    expect(parsed.commands[0]).toEqual(command);
+    const parsedCommand = parsed.commands[0];
+    if (parsedCommand?.kind !== 'duplicate-node') throw new Error('Expected duplicate command.');
+    expect(Object.isFrozen(parsedCommand.sourceAnchorRemaps)).toBe(true);
+    const siblingSource = { ...source, astNodeId: 'orders.sibling' };
+    const siblingInstance = { ...instance, instanceId: 'sibling-instance' };
+    const siblingTarget = {
+      ...command.target,
+      sourceAnchorId: 'orders.sibling',
+      operation: {
+        ...command.target.operation,
+        node: {
+          ...command.target.operation.node,
+          nodeId: 'orders.sibling',
+          source: siblingSource,
+          instance: {
+            ...siblingInstance,
+            instanceDigest: createCompilerRenderedInstanceDigest(
+              revision,
+              siblingSource,
+              siblingInstance
+            )
+          }
+        }
+      }
+    };
+    const batch = {
+      ...duplicate,
+      commands: [
+        command,
+        {
+          kind: 'duplicate-node',
+          target: siblingTarget,
+          sourceAnchorRemaps: [
+            { fromSourceAnchorId: 'orders.sibling', toSourceAnchorId: 'orders.sibling-copy' }
+          ]
+        }
+      ],
+      preconditions: [
+        ...duplicate.preconditions,
+        { kind: 'node-exists', sourceAnchorId: 'orders.sibling' },
+        {
+          kind: 'parent-is',
+          sourceAnchorId: 'orders.sibling',
+          parentSourceAnchorId: 'orders.parent'
+        }
+      ]
+    };
+    expect(parseDesignEditProposal(batch).commands).toHaveLength(2);
+    expect(() =>
+      parseDesignEditProposal({
+        ...batch,
+        commands: [
+          command,
+          {
+            ...batch.commands[1],
+            sourceAnchorRemaps: [
+              { fromSourceAnchorId: 'orders.sibling', toSourceAnchorId: 'orders.copy' }
+            ]
+          }
+        ]
+      })
+    ).toThrow(DesignEditContractError);
+    for (let index = 0; index < duplicate.preconditions.length; index += 1)
+      expect(() =>
+        parseDesignEditProposal({
+          ...duplicate,
+          preconditions: duplicate.preconditions.filter((_, position) => position !== index)
+        })
+      ).toThrow(DesignEditContractError);
+    for (const sourceAnchorRemaps of [
+      [],
+      [{ fromSourceAnchorId: 'orders.child', toSourceAnchorId: 'orders.copy' }],
+      [{ fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.root' }],
+      [{ fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.parent' }],
+      [
+        { fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.copy' },
+        { fromSourceAnchorId: 'orders.child', toSourceAnchorId: 'orders.copy' }
+      ],
+      [
+        { fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.copy' },
+        { fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.second-copy' }
+      ]
+    ])
+      expect(() =>
+        parseDesignEditProposal({ ...duplicate, commands: [{ ...command, sourceAnchorRemaps }] })
+      ).toThrow(DesignEditContractError);
+    expect(() =>
+      parseDesignEditProposal({
+        ...duplicate,
+        commands: [
+          {
+            ...command,
+            sourceAnchorRemaps: Array.from({ length: 65 }, (_, index) => ({
+              fromSourceAnchorId: `node-${index}`,
+              toSourceAnchorId: `copy-${index}`
+            }))
+          }
+        ]
+      })
+    ).toThrow(DesignEditContractError);
+  });
   it('rejects unsupported formats and does not accept inherited or accessor envelopes', () => {
     expect(() => parseDesignEditProposal({ format: 'selene-design-edit-proposal/v0' })).toThrow(
       DesignEditContractError

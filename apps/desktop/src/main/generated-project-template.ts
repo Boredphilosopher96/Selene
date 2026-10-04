@@ -5,6 +5,12 @@ import { projectComponentCatalogManifest } from '@selene/core';
 
 import type { ImmutablePublishBundle } from './designer-host-ports';
 import {
+  generatedPrototypeFiles,
+  generatedPrototypePagesWorkflow
+} from './generated-prototype-template';
+import { generatedPublicBaseline, generatedReviewFiles } from './generated-review-template';
+import { validatePublicPrototypeGraph } from './generated-publication-privacy';
+import {
   validateGeneratedProjectToolchainManifest,
   type GeneratedProjectToolchainManifest,
   type GeneratedProjectToolchainManifestPort
@@ -174,7 +180,15 @@ function isReservedSelenePath(file: string): boolean {
     normalized === '.storybook' ||
     normalized.startsWith('.storybook/') ||
     normalized === 'src/.selene-stories' ||
-    normalized.startsWith('src/.selene-stories/')
+    normalized.startsWith('src/.selene-stories/') ||
+    normalized === 'src/.selene-prototype' ||
+    normalized.startsWith('src/.selene-prototype/') ||
+    normalized === 'src/.selene-review' ||
+    normalized.startsWith('src/.selene-review/') ||
+    normalized === 'public/review' ||
+    normalized.startsWith('public/review/') ||
+    normalized === 'scripts/selene-review-artifacts.mjs' ||
+    normalized === '.github/workflows/selene-pages.yml'
   );
 }
 
@@ -279,7 +293,7 @@ function storyFile(component: LocalCatalogComponent): GeneratedProjectFile {
       : `import { ${component.exportName} as Component } from ${JSON.stringify(importPath)};`;
   return {
     path: file,
-    content: `import type { Meta, StoryObj } from '@storybook/react-vite';\n${componentImport}\n\nconst meta = { component: Component } satisfies Meta<typeof Component>;\nexport default meta;\ntype Story = StoryObj<typeof meta>;\nexport const Default: Story = {};\n`
+    content: `import type { Meta, StoryObj } from '@storybook/react-vite';\n${componentImport}\n\nconst meta = { title: ${JSON.stringify(component.id)}, component: Component } satisfies Meta<typeof Component>;\nexport default meta;\ntype Story = StoryObj<typeof meta>;\nexport const Default: Story = { parameters: { __id: ${JSON.stringify(component.storyId)} } };\n`
   };
 }
 
@@ -416,7 +430,7 @@ function packageJson(
     engines: { bun: toolchain.bunVersion },
     scripts: {
       dev: 'vite',
-      build: 'vite build',
+      build: 'bun scripts/selene-review-artifacts.mjs && vite build',
       storybook: 'storybook dev -p 6006',
       'build-storybook': 'storybook build'
     },
@@ -429,7 +443,7 @@ function packageJson(
       typescript: toolchain.packages.typescript,
       vite: toolchain.packages.vite
     },
-    selene: { generatedLockfile: { state: 'pending-install', path: 'bun.lock' } }
+    selene: { generatedLockfile: { generatedBy: 'trusted-publisher', path: 'bun.lock' } }
   });
 }
 
@@ -437,17 +451,18 @@ function requiredFiles(
   bundle: ImmutablePublishBundle,
   toolchain: GeneratedProjectToolchainManifest
 ): readonly GeneratedProjectFile[] {
+  const publicGraph = validatePublicPrototypeGraph(bundle.prototype.graph);
   const entryNode =
     bundle.source.nodes.find(
       (node) => node.path === bundle.source.entrypoint && node.exportName === 'default'
     ) ?? bundle.source.nodes.find((node) => node.path === bundle.source.entrypoint);
   if (entryNode === undefined)
     throw new Error('generated workspace entrypoint has no component export metadata');
-  const entryImport = normalizeImportPath('src/main.tsx', entryNode.path);
+  const entryImport = normalizeImportPath('src/.selene-prototype/main.tsx', entryNode.path);
   const entryComponent =
     entryNode.exportName === 'default'
-      ? `import App from '${entryImport}';`
-      : `import { ${entryNode.exportName} as App } from '${entryImport}';`;
+      ? `import App from ${JSON.stringify(entryImport)};`
+      : `import { ${entryNode.exportName} as App } from ${JSON.stringify(entryImport)};`;
   const designSystems = activeDesignSystems(bundle);
   const designSystem = designSystems[0] ?? null;
   const stagedLanguage = bundle.designInputProvenance.designLanguage;
@@ -456,7 +471,7 @@ function requiredFiles(
     {
       path: 'index.html',
       content:
-        '<!doctype html>\n<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Selene generated project</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>\n'
+        '<!doctype html>\n<html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Selene generated project</title></head><body><div id="root"></div><script type="module" src="/src/.selene-prototype/main.tsx"></script></body></html>\n'
     },
     {
       path: 'tsconfig.json',
@@ -483,11 +498,16 @@ function requiredFiles(
     {
       path: 'vite.config.ts',
       content:
-        "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({ plugins: [react()] });\n"
+        "import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({ base: './', plugins: [react()] });\n"
     },
+    ...generatedPrototypeFiles(bundle, entryComponent),
+    ...generatedReviewFiles(bundle, toolchain),
+    ...(bundle.source.files.some((file) => file.path === 'src/main.tsx')
+      ? []
+      : [{ path: 'src/main.tsx', content: "import './.selene-prototype/main';\n" }]),
     {
-      path: 'src/main.tsx',
-      content: `import { StrictMode } from 'react';\nimport { createRoot } from 'react-dom/client';\n${entryComponent}\n\ncreateRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>);\n`
+      path: '.github/workflows/selene-pages.yml',
+      content: generatedPrototypePagesWorkflow(toolchain.bunVersion)
     },
     {
       path: '.storybook/main.ts',
@@ -501,7 +521,7 @@ function requiredFiles(
     },
     {
       path: 'README.md',
-      content: `# ${bundle.projectId}\n\nThis is a deterministic Selene generated React project for bundle \`${bundle.immutableId}\`.\n\n- It uses Bun ${toolchain.bunVersion}, Vite, TypeScript, React, and Storybook exact pins from embedded build provenance.\n- \`bun.lock\` is intentionally absent from this immutable plan. Local validation creates and validates it only inside a temporary host lease; durable lock output is pending the future remote adapter.\n- The executable prototype is preserved in \`selene/prototype.json\`; Storybook only scaffolds source component exports.\n- Design-language content is provenance-only because Selene retained its digest and receipt, not the original Markdown.\n`
+      content: `# ${bundle.projectId}\n\nThis is a deterministic Selene generated React project for bundle \`${bundle.immutableId}\`.\n\nUse Bun ${toolchain.bunVersion}. The publisher commits the validated \`bun.lock\` alongside this project. Run \`bun install --frozen-lockfile\`, then \`bun run build\` to generate the review portal and immutable downloads. Run \`bun run dev\` and open \`?view=prototype\` for interactive playback, or \`bun run storybook\` for the component catalog. Run \`bun run build\` and \`bun run build-storybook\` to produce static builds.\n\nThe prototype runs the committed graph in \`selene/prototype.json\`. Scenario, Back, restart, and action controls operate on that graph. Source hotspots use \`data-selene-flow-node\` and \`data-selene-action-port\`; components receive the complete runtime snapshot through the \`selene-runtime-state\` window event. Components must render the corresponding screen, state, and overlay; a graph transition does not invent missing React views. This is simulated UI data, not a backend integration. Storybook documents source component exports separately.\n\nTo deploy, enable GitHub Pages with GitHub Actions as its source. Merge into the repository default branch or manually dispatch \`Deploy generated prototype\`. The generated workflow installs the committed lockfile, builds the prototype and catalog, includes the public review manifests and content-addressed handoff/package/lock downloads, and deploys through the \`github-pages\` environment. Repository Pages settings and environment approval remain under the repository owner's control. A code push alone does not establish a successful deployment.\n\nDesign-language content is provenance-only because Selene retained its digest and receipt, not the original Markdown.\n`
     },
     {
       path: 'selene/bundle.json',
@@ -519,23 +539,43 @@ function requiredFiles(
       content: json({
         format: 'selene-generated-project-prototype/v1',
         revision: bundle.graphRevision,
-        graph: bundle.prototype.graph
+        graph: publicGraph
       })
     },
     {
       path: 'selene/collaboration.json',
-      content: bundle.collaborationSnapshot.endsWith('\n')
-        ? bundle.collaborationSnapshot
-        : `${bundle.collaborationSnapshot}\n`
+      content: json({
+        format: 'selene-published-review-baseline/v1',
+        ...generatedPublicBaseline(bundle),
+        projection: 'Public baseline only; private collaboration records are excluded.'
+      })
     },
     {
       path: 'selene/design-inputs.json',
       content: json({
         format: 'selene-generated-project-design-inputs/v1',
-        designSystem,
-        designSystems,
+        designSystem:
+          designSystem === null
+            ? null
+            : {
+                packageName: designSystem.packageName,
+                version: designSystem.version,
+                artifactDigest: designSystem.artifactDigest
+              },
+        designSystems: designSystems.map((system) => ({
+          packageName: system.packageName,
+          version: system.version,
+          artifactDigest: system.artifactDigest
+        })),
         designLanguage:
-          stagedLanguage === undefined ? null : { ...stagedLanguage, content: 'provenance-only' }
+          stagedLanguage === undefined
+            ? null
+            : {
+                status: stagedLanguage.status,
+                artifactDigest: stagedLanguage.artifactDigest,
+                sectionCount: stagedLanguage.sectionCount,
+                content: 'provenance-only'
+              }
       })
     },
     {
@@ -546,11 +586,14 @@ function requiredFiles(
       path: 'selene/handoff-metadata.json',
       content: json({
         format: 'selene-generated-project-handoff/v1',
-        packageProvenance: bundle.packageProvenance,
+        packageProvenance: {
+          ...bundle.packageProvenance,
+          lockfile: { checksum: bundle.packageProvenance.lockfile.checksum }
+        },
         generatedLockfile: {
-          state: 'temporary-local-validation',
+          generatedBy: 'trusted-publisher',
           path: 'bun.lock',
-          requiredFor: 'bounded host validation; durable remote materialization remains pending'
+          requiredFor: 'published installation and reproducible builds'
         }
       })
     },
