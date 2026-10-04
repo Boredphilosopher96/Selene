@@ -1,0 +1,220 @@
+diff --git a/out/binDownload.js b/out/binDownload.js
+index 287e8735e53970c9787253e85b5980988719a668..30386329f90e0de8c946ecc3e660b98ef635a47a 100644
+--- a/out/binDownload.js
++++ b/out/binDownload.js
+@@ -20,11 +20,13 @@ async function download(url, output, checksum) {
+         builder_util_1.log.warn({ url }, "downloading without an integrity checksum — the download is not verified against a known-good hash");
+     }
+     const { downloadArtifact, ElectronDownloadCacheMode } = await (0, dynamicImport_1.dynamicImport)("@electron/get");
++    (0, electronGet_1.reinitializeProxy)();
+     const downloadedFile = await downloadArtifact({
+         version: "9.9.9",
+         artifactName: filenameWithExt,
+         cacheRoot: path.resolve((0, electronGet_1.getCacheDirectory)({ allowEnvVarOverride: true }), "downloads"),
+         cacheMode: ElectronDownloadCacheMode.ReadWrite,
++        downloadOptions: { signal: AbortSignal.timeout(10 * 60 * 1000) },
+         ...(checksum != null ? { checksums: { [filenameWithExt]: checksum } } : { unsafelyDisableChecksums: true }),
+         mirrorOptions: { resolveAssetURL: async () => Promise.resolve(url) },
+         isGeneric: true,
+diff --git a/out/util/electronGet.d.ts b/out/util/electronGet.d.ts
+index 315a13762664f90ab0992564808057206bfa6bd1..439099880ecba5b01da74d2d092fe1b128c11188 100644
+--- a/out/util/electronGet.d.ts
++++ b/out/util/electronGet.d.ts
+@@ -59,3 +59,8 @@ export declare function downloadElectronArtifact(options: ArtifactDownloadOption
+  * Supports various npm config formats and falls back to GitHub.
+  */
+ export declare function getBinariesMirrorUrl(githubOrgRepo: string): string;
++
++/** Re-read HTTP(S)_PROXY / NO_PROXY for the Fetch downloader. */
++export declare function reinitializeProxy(): void;
++/** Retry classification backported from electron-builder v27. */
++export declare function shouldRetryDownloadError(error: unknown): boolean;
+diff --git a/out/util/electronGet.js b/out/util/electronGet.js
+index a941f9d20c10ca58a84b9a600b0df468631aae01..8007330357ef0191d1052bff80aa29bece59fb0f 100644
+--- a/out/util/electronGet.js
++++ b/out/util/electronGet.js
+@@ -6,6 +6,8 @@ exports.downloadBuilderToolset = downloadBuilderToolset;
+ exports.downloadElectronArtifactZip = downloadElectronArtifactZip;
+ exports.downloadElectronArtifact = downloadElectronArtifact;
+ exports.getBinariesMirrorUrl = getBinariesMirrorUrl;
++exports.reinitializeProxy = reinitializeProxy;
++exports.shouldRetryDownloadError = shouldRetryDownloadError;
+ const get = require("@electron/get");
+ const get_1 = require("@electron/get");
+ const builder_util_1 = require("builder-util");
+@@ -190,8 +192,79 @@ async function extractArchive(file, dir) {
+         await release().catch(err => builder_util_1.log.warn({ err }, "failed to release lockfile"));
+     }
+ }
++let proxyInitialized = false;
++function initializeProxyOnce() {
++    if (!proxyInitialized) {
++        reinitializeProxy();
++        proxyInitialized = true;
++    }
++}
++/**
++ * Forces undici's global proxy dispatcher to re-read the current HTTP(S)_PROXY / NO_PROXY env vars,
++ * bypassing the once-guard in initializeProxyOnce(). Exported for integration testing only.
++ */
++function reinitializeProxy() {
++    get.initializeProxy();
++}
++/**
++ * Error codes considered transient for artifact downloads. Plain node socket errors carry the code
++ * directly on `error.code`; undici (the fetch implementation used by @electron/get v5) wraps them in
++ * a `TypeError: fetch failed` whose code lives on `error.cause.code` — including undici's own
++ * `UND_ERR_*` codes for connection resets and connect timeouts.
++ */
++const TRANSIENT_DOWNLOAD_ERROR_CODES = new Set([
++    "ENOTFOUND",
++    "ETIMEDOUT",
++    "ECONNRESET",
++    "ECONNREFUSED",
++    "EAI_AGAIN",
++    "EPIPE",
++    "ENOENT",
++    "UND_ERR_SOCKET",
++    "UND_ERR_CONNECT_TIMEOUT",
++]);
++/**
++ * Decides whether a failed @electron/get download should be retried. Handles all three error shapes
++ * seen in practice (exported for tests):
++ * - builder-util-runtime's `HttpError` — retry on 5xx.
++ * - @electron/get v5's `HTTPError` (`FetchDownloader`) — a plain `Error` subclass with the fetch
++ *   `Response` on `.response` and NO `.code`; retry on 5xx and 429. Matched by class and by
++ *   `name === "HTTPError"` as a fallback in case multiple @electron/get copies are loaded.
++ * - transient network errors — code on `error.code`, or on `error.cause.code` for undici's
++ *   `TypeError: fetch failed` wrapper.
++ */
++function shouldRetryDownloadError(e) {
++    if (e == null) {
++        return false;
++    }
++    if (e instanceof builder_util_runtime_1.HttpError) {
++        return e.isServerError();
++    }
++    if (e instanceof get.HTTPError || e.name === "HTTPError") {
++        const status = e.response?.status;
++        return typeof status === "number" && (status >= 500 || status === 429);
++    }
++    const code = typeof e.code === "string" ? e.code : typeof e.cause?.code === "string" ? e.cause.code : undefined;
++    return code != null && TRANSIENT_DOWNLOAD_ERROR_CODES.has(code);
++}
++// Custom downloaders retain their arbitrary option API. The default downloader
++// must fail on unknown got options rather than silently losing auth/body settings.
++const FETCH_DOWNLOAD_OPTION_KEYS = new Set([
++    "method", "headers", "body", "mode", "credentials", "cache", "redirect",
++    "referrer", "referrerPolicy", "integrity", "keepalive", "signal", "window",
++    "duplex", "priority", "dispatcher", "quiet", "getProgressCallback",
++]);
++function validateFetchDownloadOptions(config) {
++    if (config.downloader != null) return;
++    for (const key of Object.keys(config.downloadOptions || {})) {
++        if (!FETCH_DOWNLOAD_OPTION_KEYS.has(key)) {
++            throw new Error(`electronDownload.downloadOptions.${key} is unsupported by @electron/get v5; use Fetch RequestInit options or an explicit custom downloader`);
++        }
++    }
++}
+ async function downloadArtifactToFile(config, label) {
+-    var _a, _b, _c, _d;
++    var _c, _d;
++    validateFetchDownloadOptions(config);
+     // Serialize concurrent downloads of the same artifact across vitest workers to prevent @electron/get's
+     // non-atomic putFileInCache (remove + move) from racing with a concurrent reader.
+     const artifactLockKey = crypto
+@@ -210,10 +283,9 @@ async function downloadArtifactToFile(config, label) {
+     });
+     let lastLoggedMilestone = -1;
+     const state = { bar: undefined };
++    initializeProxyOnce();
+     const downloadOptions = {
+-        timeout: { request: 10 * 60 * 1000 }, // prevent indefinite hang on stalled connections
+         ...config.downloadOptions,
+-        agent: (_b = (_a = config.downloadOptions) === null || _a === void 0 ? void 0 : _a.agent) !== null && _b !== void 0 ? _b : (0, builder_util_1.buildGotProxyAgent)(),
+         getProgressCallback: info => {
+             // @electron/get passes downloadOptions (including this callback) to its internal
+             // SHASUMS256.txt validation download. That file is tiny (<1 MB) and fires at 100%
+@@ -242,28 +314,30 @@ async function downloadArtifactToFile(config, label) {
+         },
+     };
+     const configWithProgress = { ...config, downloadOptions };
++    // Each retry gets a fresh bounded attempt; artifact and checksum requests share
++    // the attempt budget. Caller-provided signals and custom downloader options
++    // remain caller-owned instead of being silently replaced.
++    const downloadAttempt = (overrides = {}) => get.downloadArtifact({
++        ...configWithProgress,
++        ...overrides,
++        downloadOptions: config.downloader != null ? downloadOptions : {
++            ...downloadOptions,
++            signal: config.downloadOptions?.signal ?? AbortSignal.timeout(10 * 60 * 1000),
++        },
++    });
+     try {
+         let filePath;
+         try {
+-            filePath = await (0, builder_util_runtime_1.retry)(() => get.downloadArtifact(configWithProgress), {
++            filePath = await (0, builder_util_runtime_1.retry)(() => downloadAttempt(), {
+                 retries: 3,
+                 interval: 2000,
+                 backoff: 2000,
+-                shouldRetry: (e) => {
+-                    var _a;
+-                    if (e instanceof builder_util_runtime_1.HttpError) {
+-                        return e.isServerError();
+-                    }
+-                    if (typeof ((_a = e === null || e === void 0 ? void 0 : e.response) === null || _a === void 0 ? void 0 : _a.statusCode) === "number") {
+-                        return e.response.statusCode >= 500;
+-                    }
+-                    return typeof (e === null || e === void 0 ? void 0 : e.code) === "string" && ["ENOTFOUND", "ETIMEDOUT", "ECONNRESET", "EPIPE", "ENOENT"].includes(e.code);
+-                },
++                shouldRetry: shouldRetryDownloadError,
+             });
+         }
+         catch (err) {
+             if (typeof (err === null || err === void 0 ? void 0 : err.message) === "string" && err.message.includes("dest already exists")) {
+-                filePath = await get.downloadArtifact(configWithProgress);
++                filePath = await downloadAttempt();
+             }
+             else {
+                 throw err;
+@@ -271,7 +345,7 @@ async function downloadArtifactToFile(config, label) {
+         }
+         if (!(await (0, builder_util_1.exists)(filePath))) {
+             builder_util_1.log.warn({ filePath, label }, "cached artifact missing from disk; retrying with cache write");
+-            filePath = await get.downloadArtifact({ ...configWithProgress, cacheMode: get_1.ElectronDownloadCacheMode.WriteOnly });
++            filePath = await downloadAttempt({ cacheMode: get_1.ElectronDownloadCacheMode.WriteOnly });
+         }
+         if (!state.bar && lastLoggedMilestone === -1) {
+             builder_util_1.log.info({ label }, "using cached artifact");
+@@ -452,18 +526,15 @@ function buildElectronArtifactConfig(options) {
+     const { electronDownload, arch, version, platformName: platform, artifactName, cacheDir: cacheRoot } = options;
+     let artifactConfig = { cacheRoot, platform, arch, version, artifactName };
+     if (electronDownload != null) {
++        if (electronDownload.strictSSL === false) {
++            throw new Error("electronDownload.strictSSL: false is unsupported by the Fetch downloader; configure a trusted CA for your build network");
++        }
+         if (isElectronGetOptions(electronDownload)) {
+             const { mirrorOptions, ...rest } = electronDownload;
+             artifactConfig = { ...artifactConfig, ...rest, cacheRoot, mirrorOptions };
+         }
+         else {
+-            const { mirror, customDir, cache, customFilename, isVerifyChecksum, strictSSL, platform: overridePlatform, arch: overrideArch } = electronDownload;
+-            // strictSSL: false disables TLS certificate validation for all
+-            // electron/tool downloads.  This option exists only for air-gapped or
+-            // self-signed-cert environments; ensure your build network is fully trusted.
+-            if (strictSSL === false) {
+-                builder_util_1.log.warn({ option: "electronDownload.strictSSL" }, "strictSSL is false — TLS certificate validation is DISABLED for Electron downloads. Only use this option in a trusted, isolated build environment.");
+-            }
++            const { mirror, customDir, cache, customFilename, isVerifyChecksum, platform: overridePlatform, arch: overrideArch } = electronDownload;
+             artifactConfig = {
+                 ...artifactConfig,
+                 unsafelyDisableChecksums: isVerifyChecksum === false,
+@@ -473,7 +544,6 @@ function buildElectronArtifactConfig(options) {
+                     customDir: customDir || undefined,
+                     customFilename: customFilename || undefined,
+                 },
+-                ...(strictSSL === false ? { downloadOptions: { https: { rejectUnauthorized: false } } } : {}),
+             };
+             if (overridePlatform != null) {
+                 artifactConfig.platform = overridePlatform;

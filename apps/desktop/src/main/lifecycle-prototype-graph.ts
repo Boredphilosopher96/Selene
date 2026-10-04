@@ -67,25 +67,25 @@ export class LifecyclePrototypeGraphPersistencePort implements PrototypeGraphPer
     state?: LocalDesignerState
   ) {
     if (state === undefined) throw new Error('Flow recovery requires its canonical review state.');
-    const recovery = await this.legacy.recoverFromFixture(projectId, graph);
-    try {
-      const current = (await this.lifecycle.designerState(projectId))?.prototypeGraph;
-      const saved = await this.lifecycle.commitPrototypeGraph({
-        projectId,
-        expectedRevision: current?.revision ?? 0,
-        legacyRevision: 0,
-        graph,
-        state
-      });
-      return { saved, receipt: recovery.receipt };
-    } catch (error) {
-      if (
-        error instanceof ProjectLifecycleError &&
-        error.code === 'NOT_FOUND' &&
-        state.baseline.baseline === undefined
-      )
-        return recovery;
-      throw error;
-    }
+    return this.legacy.recoverFromFixture(projectId, graph, undefined, async () => {
+      try {
+        const current = (await this.lifecycle.designerState(projectId))?.prototypeGraph;
+        return await this.lifecycle.commitPrototypeGraph({
+          projectId,
+          expectedRevision: current?.revision ?? 0,
+          legacyRevision: 0,
+          graph,
+          state
+        });
+      } catch (error) {
+        if (
+          error instanceof ProjectLifecycleError &&
+          error.code === 'NOT_FOUND' &&
+          state.baseline.baseline === undefined
+        )
+          return undefined;
+        throw error;
+      }
+    });
   }
 }

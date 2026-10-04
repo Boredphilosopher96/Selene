@@ -151,12 +151,15 @@ export function createProjectRecoveryBrowserClient(
   };
   return {
     async backup(projectId, retentionDays) {
-      return verifyProjectBackup(
+      const backup = await verifyProjectBackup(
         await call(
           `/v1/projects/${encodeURIComponent(projectId)}/backup?retentionDays=${retentionDays}`,
           {}
         )
       );
+      if (backup.document.projectId !== projectId)
+        throw new Error('The returned backup belongs to another project.');
+      return backup;
     },
     async restore(backup, expectedRevisionId) {
       const verified = await verifyProjectBackup(backup);

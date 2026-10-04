@@ -82,6 +82,7 @@ import type {
 } from '../../../shared/designer-api';
 import type { DesignSystemComponentPropertyValue } from '../../../shared/designer-api';
 import './canvas-workspace.css';
+import { StudioIcon } from './studio-icon';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
 
@@ -2086,9 +2087,9 @@ export function CanvasWorkspace({
     };
   }, [applyShortcut]);
   useEffect(() => {
-    if (mode !== 'present') return;
+    if (mode !== 'present' || readOnly) return;
     requestAnimationFrame(() => presentExit.current?.focus());
-  }, [mode]);
+  }, [mode, readOnly]);
   useEffect(() => {
     if (mode !== 'present') return;
     const exitFromTrustedPreview = () => {
@@ -2130,10 +2131,17 @@ export function CanvasWorkspace({
         <CanvasPreviewContext.Provider value={preview}>
           <div className="canvas-presentation__artifact">{preview}</div>
         </CanvasPreviewContext.Provider>
+        <output className="canvas-presentation__status" aria-live="polite">
+          {safeDesignerNotice(
+            saveStatus,
+            'Presentation status is unavailable. Try Exit to return to the editor.'
+          )}
+        </output>
         <button
           className="canvas-presentation__exit"
           ref={presentExit}
           type="button"
+          disabled={readOnly}
           onClick={(event) => void onModeChange('design', event.currentTarget)}
         >
           Exit
@@ -2163,39 +2171,49 @@ export function CanvasWorkspace({
       }}
     >
       <header className="canvas-workspace__toolbar">
-        <div role="toolbar" aria-label="Canvas tools">
-          <button
-            type="button"
-            aria-pressed={surface === 'canvas'}
-            onClick={() => setSurface('canvas')}
+        <div className="canvas-workspace__tools" role="toolbar" aria-label="Canvas tools">
+          <div
+            className="canvas-workspace__tool-group canvas-workspace__modes"
+            role="group"
+            aria-label="Workspace modes"
           >
-            Design
-          </button>
-          <button
-            type="button"
-            aria-pressed={surface === 'components'}
-            onClick={() => {
-              clearCanvasSelection();
-              clearCatalogDrag();
-              setSurface('components');
-            }}
-          >
-            Components
-          </button>
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={(event) => {
-              setSurface('canvas');
-              void onModeChange('present', event.currentTarget);
-            }}
-          >
-            Present
-          </button>
+            <button
+              type="button"
+              aria-pressed={surface === 'canvas'}
+              onClick={() => setSurface('canvas')}
+            >
+              <StudioIcon name="canvas" /> Design
+            </button>
+            <button
+              type="button"
+              aria-pressed={surface === 'components'}
+              onClick={() => {
+                clearCanvasSelection();
+                clearCatalogDrag();
+                setSurface('components');
+              }}
+            >
+              <StudioIcon name="components" /> Components
+            </button>
+            <button
+              type="button"
+              disabled={readOnly}
+              onClick={(event) => {
+                setSurface('canvas');
+                void onModeChange('present', event.currentTarget);
+              }}
+            >
+              <StudioIcon name="play" /> Present
+            </button>
+          </div>
           {surface === 'canvas' ? (
             <>
               {!readOnly ? (
-                <>
+                <div
+                  className="canvas-workspace__tool-group"
+                  role="group"
+                  aria-label="Flow history and connections"
+                >
                   <button
                     type="button"
                     data-graph-history
@@ -2204,7 +2222,7 @@ export function CanvasWorkspace({
                     disabled={graphPending || graphHistory.past.length === 0}
                     onClick={() => applyFlowHistory.current('undo')}
                   >
-                    Undo
+                    <StudioIcon name="undo" /> Undo
                   </button>
                   <button
                     type="button"
@@ -2214,7 +2232,7 @@ export function CanvasWorkspace({
                     disabled={graphPending || graphHistory.future.length === 0}
                     onClick={() => applyFlowHistory.current('redo')}
                   >
-                    Redo
+                    <StudioIcon name="redo" /> Redo
                   </button>
                   <button
                     type="button"
@@ -2227,61 +2245,69 @@ export function CanvasWorkspace({
                       setConnectionEditorOpen((open) => !open);
                     }}
                   >
-                    Connections
+                    <StudioIcon name="connections" /> Connections
                   </button>
-                </>
+                </div>
               ) : null}
-              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
-              <button
-                type="button"
-                aria-pressed={handTool}
-                aria-keyshortcuts="H"
-                onClick={() => {
-                  clearCanvasSelection();
-                  setHandTool((current) => !current);
-                }}
+              <div
+                className="canvas-workspace__tool-group"
+                role="group"
+                aria-label="Canvas navigation"
               >
-                Hand <kbd>H</kbd>
-              </button>
-              <button
-                type="button"
-                aria-keyshortcuts="Shift+1"
-                data-canvas-command="fit-all"
-                onClick={() => {
-                  clearCanvasSelection();
-                  void fitAll();
-                }}
-              >
-                Fit all <kbd>⇧1</kbd>
-              </button>
-              <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
-                Reset <kbd>⇧0</kbd>
-              </button>
-              <button
-                type="button"
-                aria-label="Fit selection"
-                aria-keyshortcuts="Shift+2"
-                data-canvas-command="fit-selection"
-                title="Fit selection (Shift+2)"
-                onClick={() => void fitSelection()}
-              >
-                Fit <kbd>⇧2</kbd>
-              </button>
-              <button
-                className="canvas-workspace__selection-tool"
-                type="button"
-                aria-label="Selection"
-                aria-keyshortcuts="V"
-                data-canvas-command="selection-tool"
-                title="Selection tool (V)"
-                onClick={activateSelectionTool}
-              >
-                <svg aria-hidden="true" viewBox="0 0 16 16">
-                  <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
-                </svg>
-                <kbd>V</kbd>
-              </button>
-              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  aria-pressed={handTool}
+                  aria-keyshortcuts="H"
+                  onClick={() => {
+                    clearCanvasSelection();
+                    setHandTool((current) => !current);
+                  }}
+                >
+                  <StudioIcon name="hand" /> Hand <kbd>H</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-keyshortcuts="Shift+1"
+                  data-canvas-command="fit-all"
+                  onClick={() => {
+                    clearCanvasSelection();
+                    void fitAll();
+                  }}
+                >
+                  <StudioIcon name="fit" /> Fit all <kbd>⇧1</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-keyshortcuts="Shift+0"
+                  onClick={() => void fitArtboards()}
+                >
+                  Reset <kbd>⇧0</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Fit selection"
+                  aria-keyshortcuts="Shift+2"
+                  data-canvas-command="fit-selection"
+                  title="Fit selection (Shift+2)"
+                  onClick={() => void fitSelection()}
+                >
+                  Fit <kbd>⇧2</kbd>
+                </button>
+                <button
+                  className="canvas-workspace__selection-tool"
+                  type="button"
+                  aria-label="Selection"
+                  aria-keyshortcuts="V"
+                  data-canvas-command="selection-tool"
+                  title="Selection tool (V)"
+                  onClick={activateSelectionTool}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 16 16">
+                    <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
+                  </svg>
+                  <kbd>V</kbd>
+                </button>
+              </div>
               <button
                 className="canvas-workspace__ask-ai"
                 type="button"
@@ -2291,7 +2317,7 @@ export function CanvasWorkspace({
                   onRequestAiTarget(event.currentTarget);
                 }}
               >
-                @ Ask AI
+                <StudioIcon name="sparkles" /> @ Ask AI
               </button>
             </>
           ) : null}
@@ -2313,7 +2339,7 @@ export function CanvasWorkspace({
           <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
             {onOpenAi ? (
               <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
-                AI
+                <StudioIcon name="sparkles" /> AI
               </button>
             ) : null}
             {onOpenInspector ? (
@@ -2323,7 +2349,7 @@ export function CanvasWorkspace({
                 aria-label="Open Dev Inspect"
                 onClick={onOpenInspector}
               >
-                Inspect
+                <StudioIcon name="inspect" /> Inspect
               </button>
             ) : null}
           </div>

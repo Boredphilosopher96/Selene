@@ -2503,6 +2503,65 @@ export function createCollaborationService(
           })
         );
       }
+      if (request.method === 'POST' && url.pathname === '/v1/import') {
+        const snapshot = await readSnapshot(request, maximumSnapshotBytes);
+        const existing = await repository<Project | undefined>(request, 'getProject', [
+          snapshot.project.id
+        ]);
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Project not found');
+        const userId = await requireUserAuthorization(request, 'project:restore', {
+          projectId: existing.id
+        });
+        if (existing.organizationId !== snapshot.project.organizationId)
+          throw new CollaborationError('FORBIDDEN', 'Import project identity is invalid');
+        const expectedRevisionId = request.headers.get('x-selene-expected-revision-id');
+        if (
+          expectedRevisionId === null ||
+          expectedRevisionId.length === 0 ||
+          expectedRevisionId.length > collaborationBudgets.maxText
+        )
+          throw new CollaborationError('INVALID', 'Import requires the current revision');
+        const result = await idempotent(
+          options.repository,
+          JSON.stringify(['import', userId, snapshot.project.id, expectedRevisionId]),
+          request.headers.get('idempotency-key') ?? undefined,
+          async () => {
+            const current = await repository<Revision | undefined>(request, 'getLatestRevision', [
+              snapshot.project.id
+            ]);
+            if (current?.id !== expectedRevisionId)
+              throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+            try {
+              await repository<void>(request, 'replaceProject', [
+                snapshot,
+                { expectedLatestRevisionId: expectedRevisionId, context: contextFor(request) }
+              ]);
+            } catch (error) {
+              if (!isOwnedServiceUnavailableError(error)) throw error;
+              // A concurrent CAS loss is proven by persisted state, never by
+              // inspecting an arbitrary adapter exception or its message.
+              const latest = await repository<Revision | undefined>(request, 'getLatestRevision', [
+                snapshot.project.id
+              ]);
+              if (latest?.id !== expectedRevisionId)
+                throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+              throw error;
+            }
+            await emit(
+              request,
+              snapshot.project.id,
+              'project.imported',
+              userId,
+              'project',
+              snapshot.project.id,
+              {}
+            );
+            return { projectId: snapshot.project.id, imported: true };
+          },
+          contextFor(request)
+        );
+        return cors(request, json(result, 201));
+      }
       if (request.method === 'POST' && url.pathname === '/v1/sync') {
         const snapshot = await readSnapshot(request, maximumSnapshotBytes);
         const existing = await repository<

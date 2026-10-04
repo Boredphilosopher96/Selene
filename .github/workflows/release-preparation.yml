@@ -63,13 +63,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Create version and changelog pull request
-        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
-          version: bun run version-packages
-          commit: 'chore: version packages'
-          title: 'chore: version packages'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          version-script: bun run version-packages
+          commit-message: 'chore: version packages'
+          pr-title: 'chore: version packages'
+          github-token: ${{ github.token }}
 
   release-dry-run:
     name: Validate package release dry run
@@ -196,7 +195,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Attest desktop artifact provenance
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: artifacts/release-assets/${{ matrix.platform }}-${{ matrix.arch }}/*
 
@@ -287,7 +286,7 @@ jobs:
           retention-days: 30
       - name: Attest protected signed artifact provenance
         if: steps.signing.outputs.enabled == 'true'
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: artifacts/release-assets/${{ matrix.platform }}-${{ matrix.arch }}/*
 

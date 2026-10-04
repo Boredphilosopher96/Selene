@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,7 +53,11 @@ import {
 } from './generated-project-template';
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import { createLocalCatalogFixturePort, DesktopDesignSystemIntake } from './designer-setup-host';
-import type { PersistedPrototypeGraph, PrototypeGraphPersistencePort } from './designer-host-ports';
+import {
+  JsonPrototypeGraphPersistencePort,
+  type PersistedPrototypeGraph,
+  type PrototypeGraphPersistencePort
+} from './designer-host-ports';
 import type { SpatialTargetInput } from '../shared/designer-api';
 import {
   DurableDesignLanguageGuidancePort,
@@ -151,11 +155,12 @@ function fixtureGraphPersistence(): PrototypeGraphPersistencePort {
       saved.set(projectId, next);
       return structuredClone(next);
     },
-    async recoverFromFixture(projectId, graph) {
+    async recoverFromFixture(projectId, graph, _state, commitRecovery) {
       const next = { revision: 1, graph: structuredClone(graph) };
-      saved.set(projectId, next);
+      const canonical = await commitRecovery?.(next);
+      if (canonical === undefined) saved.set(projectId, next);
       return {
-        saved: structuredClone(next),
+        saved: structuredClone(canonical ?? next),
         receipt: {
           recoveryId: 'graph-recovery-00000000-0000-4000-8000-000000000000',
           originalBytes: 0,
@@ -3057,7 +3062,7 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       origin: 'created',
       workspace
     });
-    const persistence = new LifecyclePrototypeGraphPersistencePort(
+    const persistence: PrototypeGraphPersistencePort = new LifecyclePrototypeGraphPersistencePort(
       lifecycle,
       fixtureGraphPersistence()
     );
@@ -3100,6 +3105,137 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect((await lifecycle.designerState(workspace.projectId))?.baseline).toEqual(
       recovered.baseline
     );
+  });
+
+  it('recovers the uncreated launchpad sample through legacy storage without a canonical baseline', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-sample-recovery-'));
+    try {
+      const lifecycle = new LocalProjectLifecycleService(createInMemoryProjectLifecycleStorage());
+      const legacy = new JsonPrototypeGraphPersistencePort(directory);
+      const service = fixtureService({
+        graphPersistence: new LifecyclePrototypeGraphPersistencePort(lifecycle, legacy)
+      });
+      service.registerAgent(new DeterministicDesignerFixtureAdapter());
+      const projectId = service.snapshot().source.projectId;
+      await writeFile(join(directory, `${encodeURIComponent(projectId)}.json`), 'corrupt sample');
+      await service.retryPrototypeGraphHydration();
+      expect(service.snapshot().prototypeGraphHydration.state).toBe('recovery-required');
+      expect(service.snapshot().baseline.baseline).toBeUndefined();
+      const recovered = await service.recoverPrototypeGraphFromFixture();
+      expect(recovered.prototypeGraphHydration.state).toBe('persisted');
+      await expect(lifecycle.designerState(projectId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+      await expect(
+        new JsonPrototypeGraphPersistencePort(directory).read(projectId)
+      ).resolves.toEqual({
+        revision: 1,
+        graph: recovered.editablePrototype.graph
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps failed legacy flow recovery fenced across reopen until graph and baseline commit together', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'selene-flow-recovery-'));
+    try {
+      const storage = countingStorage();
+      const lifecycle = new LocalProjectLifecycleService(storage.storage);
+      const workspace = freshWorkspace();
+      await lifecycle.create({
+        id: workspace.projectId,
+        name: 'Legacy recovery',
+        origin: 'created',
+        workspace
+      });
+      const initial = fixtureService({ projectState: lifecycle });
+      initial.registerAgent(new DeterministicDesignerFixtureAdapter());
+      await initial.openProjectWorkspace(workspace);
+      await initial.markReadyForReview();
+      const record = await lifecycle.open(workspace.projectId);
+      if (record.designerState === undefined) throw new Error('Missing persisted baseline');
+      // Before canonical graph migration, review state lives in the project
+      // record while its flow graph remains in the separate legacy file.
+      const { prototypeGraph: _graph, ...legacyState } = record.designerState;
+      await storage.storage.commit(workspace.projectId, { ...record, designerState: legacyState });
+      const corrupt = 'corrupt legacy graph evidence';
+      const encodedId = encodeURIComponent(workspace.projectId);
+      await writeFile(join(directory, `${encodedId}.json`), corrupt);
+      const create = async () => {
+        const reopenedLifecycle = new LocalProjectLifecycleService(storage.storage);
+        const graphs = new LifecyclePrototypeGraphPersistencePort(
+          reopenedLifecycle,
+          new JsonPrototypeGraphPersistencePort(directory)
+        );
+        const service = fixtureService({
+          projectState: reopenedLifecycle,
+          graphPersistence: graphs
+        });
+        service.registerAgent(new DeterministicDesignerFixtureAdapter());
+        await service.openProjectWorkspace(
+          (await reopenedLifecycle.open(workspace.projectId)).current
+        );
+        return { service, lifecycle: reopenedLifecycle, graphs };
+      };
+      const first = await create();
+      const before = first.service.snapshot();
+      const durableBefore = await first.lifecycle.designerState(workspace.projectId);
+      expect(before.prototypeGraphHydration.state).toBe('recovery-required');
+      expect(before.baseline.currency).toBe('current');
+      storage.failNextCommit();
+      await expect(first.service.recoverPrototypeGraphFromFixture()).rejects.toThrow(
+        'fixture lifecycle commit failed'
+      );
+      expect(first.service.snapshot()).toEqual(before);
+      expect(await first.lifecycle.designerState(workspace.projectId)).toEqual(durableBefore);
+
+      const restarted = await create();
+      const pending = restarted.service.snapshot();
+      expect(pending.prototypeGraphHydration.state).toBe('recovery-required');
+      expect(pending.baseline).toEqual(before.baseline);
+      expect(pending.source).toEqual(before.source);
+      const recoveryId = pending.prototypeGraphHydration.recovery?.recoveryId;
+      if (recoveryId === undefined) throw new Error('Missing pending recovery identity');
+      await expect(restarted.graphs.read(workspace.projectId)).rejects.toMatchObject({
+        code: 'GRAPH_PERSISTENCE_CORRUPT',
+        recoveryId
+      });
+      const quarantine = join(directory, 'recovery', `${encodedId}-${recoveryId}.json`);
+      expect(await readFile(quarantine, 'utf8')).toBe(corrupt);
+      const receiptBefore = await readFile(`${quarantine}.receipt.json`, 'utf8');
+      expect(JSON.parse(receiptBefore)).toMatchObject({
+        recoveryId,
+        capturedSha256: createHash('sha256').update(corrupt).digest('hex'),
+        capturedPrefixBase64: Buffer.from(corrupt).toString('base64')
+      });
+
+      const recovered = await restarted.service.recoverPrototypeGraphFromFixture();
+      expect(recovered.prototypeGraphHydration).toMatchObject({
+        state: 'persisted',
+        recovery: { recoveryId }
+      });
+      expect(recovered.baseline).toMatchObject({
+        currency: 'stale',
+        approvalsStale: true,
+        changesSinceBaseline: [
+          { kind: 'flow', reason: 'Recovered the prototype flow after saved graph corruption.' }
+        ]
+      });
+      expect(await readFile(quarantine, 'utf8')).toBe(corrupt);
+      expect(await readFile(`${quarantine}.receipt.json`, 'utf8')).toBe(receiptBefore);
+      const durableAfter = await restarted.lifecycle.designerState(workspace.projectId);
+      expect(durableAfter?.baseline).toEqual(recovered.baseline);
+      expect(durableAfter?.prototypeGraph).toEqual({
+        revision: recovered.editablePrototype.revision,
+        graph: recovered.editablePrototype.graph
+      });
+      const reopened = (await create()).service.snapshot();
+      expect(reopened.prototypeGraphHydration.state).toBe('persisted');
+      expect(reopened.editablePrototype).toEqual(recovered.editablePrototype);
+      expect(reopened.baseline).toEqual(recovered.baseline);
+      expect(reopened.source).toEqual(before.source);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('tracks design input changes atomically, preserves no-op baselines and rolls back failed persistence', async () => {
@@ -5239,6 +5375,163 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
     expect(captured).toEqual([
       { source: 'service', category: 'operation-failure', hostile: 'received' }
     ]);
+  });
+
+  it.each(['started', 'applying', 'compiling'] as const)(
+    'honors AI cancellation at the %s boundary without retaining a proposal',
+    async (stage) => {
+      const persisted = fixtureProjectState();
+      let service: DesktopDesignerApplicationService;
+      let requestId: string | undefined;
+      const compiler = vi.fn(async (workspace: ReactSourceWorkspace) => {
+        if (stage === 'compiling') {
+          if (requestId === undefined) throw new Error('Request identity was not emitted.');
+          service.cancel(requestId);
+        }
+        const sourceDigest = createHash('sha256')
+          .update(serializeCanonicalData(workspace))
+          .digest('hex');
+        return {
+          projectId: workspace.projectId,
+          sourceRevisionId: workspace.revision.id,
+          sourceDigest,
+          bindingDigest: createHash('sha256').update(`binding:${sourceDigest}`).digest('hex'),
+          compilerId: 'selene-fixture-compiler/v1',
+          compilerDigest: createHash('sha256').update('fixture-compiler').digest('hex'),
+          previewDigest: createHash('sha256').update(`preview:${sourceDigest}`).digest('hex')
+        };
+      });
+      service = fixtureService({
+        projectState: persisted.port,
+        manualEditTransaction: {
+          compileWorkspace: compiler,
+          evaluate: new UnavailableManualReactEditTransactionPort().evaluate
+        }
+      });
+      const fixture = new DeterministicDesignerFixtureAdapter();
+      const propose = vi.fn(fixture.propose.bind(fixture));
+      service.registerAgent({ descriptor: fixture.descriptor, propose });
+      const before = service.snapshot();
+      service.subscribe((event) => {
+        requestId = event.requestId;
+        if (event.stage === stage) service.cancel(event.requestId);
+      });
+
+      await expect(
+        service.requestAIChange({
+          kind: 'general',
+          agentId: fixture.descriptor.id,
+          instruction: 'Cancel before the compiled proposal is committed.'
+        })
+      ).rejects.toThrow(/cancel/i);
+
+      const after = service.snapshot();
+      expect(after.source).toEqual(before.source);
+      expect(after.baseline).toEqual(before.baseline);
+      expect(after.pendingAIProposal).toBeUndefined();
+      expect(after.aiChangeRequests.at(-1)?.status).toBe('cancelled');
+      expect(persisted.read()?.pendingAIProposal).toBeUndefined();
+      expect(propose).toHaveBeenCalledTimes(stage === 'started' ? 0 : 1);
+      expect(compiler).toHaveBeenCalledTimes(stage === 'compiling' ? 1 : 0);
+      await service.openProjectWorkspace(before.source);
+    }
+  );
+
+  it('makes proposal persistence an explicit irreversible cancellation boundary', async () => {
+    const persisted = fixtureProjectState();
+    let enteredSave: (() => void) | undefined;
+    const saving = new Promise<void>((resolve) => {
+      enteredSave = resolve;
+    });
+    let releaseSave: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const service = fixtureService({
+      projectState: {
+        ...persisted.port,
+        async saveDesignerState(projectId, state) {
+          if (state.pendingAIProposal !== undefined) {
+            enteredSave?.();
+            await gate;
+          }
+          await persisted.port.saveDesignerState(projectId, state);
+        }
+      }
+    });
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    let requestId: string | undefined;
+    service.subscribe((event) => {
+      requestId = event.requestId;
+    });
+    const request = service.requestAIChange({
+      kind: 'general',
+      agentId: 'fixture-designer',
+      instruction: 'Save this compiled proposal for a deliberate review decision.'
+    });
+    try {
+      await within(saving);
+      if (requestId === undefined) throw new Error('Request identity was not emitted.');
+      expect(() => service.cancel(requestId)).toThrow(/being saved.*reject/i);
+    } finally {
+      releaseSave?.();
+    }
+    const staged = await request;
+    expect(staged.aiChangeRequests.at(-1)?.status).toBe('reviewing');
+    expect(persisted.read()?.pendingAIProposal?.requestId).toBe(requestId);
+    const pending = staged.pendingAIProposal;
+    if (pending === undefined) throw new Error('Saved proposal was not retained.');
+    const rejected = await service.rejectPendingAIProposal({
+      projectId: staged.source.projectId,
+      requestId: pending.requestId,
+      candidateRevisionId: pending.candidateRevisionId
+    });
+    expect(rejected.pendingAIProposal).toBeUndefined();
+    expect(rejected.aiChangeRequests.at(-1)?.status).toBe('cancelled');
+  });
+
+  it('recovers an interrupted durable AI request on reopen without leaving the composer busy', async () => {
+    const persisted = fixtureProjectState();
+    const writer = fixtureService({ projectState: persisted.port });
+    writer.registerAgent(new DeterministicDesignerFixtureAdapter());
+    let interrupted: LocalDesignerState | undefined;
+    writer.subscribe((event) => {
+      if (event.stage !== 'started') return;
+      interrupted = persisted.read();
+      writer.cancel(event.requestId);
+    });
+    const source = writer.snapshot().source;
+    await expect(
+      writer.requestAIChange({
+        kind: 'general',
+        agentId: 'fixture-designer',
+        instruction: 'Simulate interruption after the running request is durably recorded.'
+      })
+    ).rejects.toThrow(/cancel/i);
+    if (interrupted === undefined) throw new Error('Interrupted durable state was not captured.');
+    expect(
+      parseSnapshot(interrupted.collaborationSnapshot).aiChangeRequests.at(-1)?.lifecycle
+    ).toBe('running');
+    expect(interrupted.pendingAIProposal).toBeUndefined();
+    persisted.replace(interrupted);
+
+    const reader = fixtureService({ projectState: persisted.port });
+    reader.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const reopened = await reader.openProjectWorkspace(source);
+    expect(reopened.source).toEqual(source);
+    expect(reopened.aiChangeRequests.at(-1)).toMatchObject({
+      status: 'failed',
+      error: expect.stringMatching(/interrupted/i)
+    });
+    expect(
+      parseSnapshot(persisted.read()!.collaborationSnapshot).aiChangeRequests.at(-1)
+    ).toMatchObject({ lifecycle: 'failed', failureReason: expect.stringMatching(/interrupted/i) });
+    const staged = await reader.requestAIChange({
+      kind: 'general',
+      agentId: 'fixture-designer',
+      instruction: 'Start a fresh request after recovery.'
+    });
+    expect(staged.pendingAIProposal).toBeDefined();
   });
 
   it('records configured JSONL process failures and cancellation without source mutation', async () => {

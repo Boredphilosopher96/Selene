@@ -5869,7 +5869,31 @@ export class DesktopDesignerApplicationService {
       throw new DesignerApplicationError(
         'Saved collaboration revision does not match the lifecycle workspace.'
       );
-    this.collaboration = snapshot;
+    // A new service cannot resume the old process's provider request. Retain
+    // durable compiled proposals, but make pre-proposal interruptions terminal
+    // so the reopened conversation can start another request.
+    const interrupted = snapshot.aiChangeRequests.some(
+      (request) =>
+        (request.lifecycle === 'queued' || request.lifecycle === 'running') &&
+        request.id !== stored.pendingAIProposal?.requestId
+    );
+    this.collaboration = interrupted
+      ? {
+          ...snapshot,
+          aiChangeRequests: snapshot.aiChangeRequests.map((request) =>
+            (request.lifecycle === 'queued' || request.lifecycle === 'running') &&
+            request.id !== stored.pendingAIProposal?.requestId
+              ? {
+                  ...request,
+                  lifecycle: 'failed' as const,
+                  failureReason:
+                    'The AI request was interrupted before a compiled proposal was saved. Retry the change.',
+                  updatedAt: new Date().toISOString()
+                }
+              : request
+          )
+        }
+      : snapshot;
     this.designInputProvenance = {
       format: 'selene-desktop-current-workspace-design-inputs/v1',
       projectId,
@@ -5906,7 +5930,7 @@ export class DesktopDesignerApplicationService {
         ? {}
         : { designLanguage: structuredClone(stored.setup.designLanguage) })
     };
-    const hydrated = projectRendererState(snapshot);
+    const hydrated = projectRendererState(this.collaboration);
     this.baseline = hydrated.baseline;
     this.reviewThreads.splice(0, this.reviewThreads.length, ...hydrated.reviewThreads);
     this.artifactPins.splice(0, this.artifactPins.length, ...hydrated.artifactPins);
@@ -5932,7 +5956,7 @@ export class DesktopDesignerApplicationService {
     this.manualReactEditAuthority = stored.manualReactEditAuthority;
     this.manualReactEditJournal = stored.manualReactEditJournal;
     this.pendingReactBinding = stored.reactBinding;
-    this.pendingProjectStateMigration = migration.migrated;
+    this.pendingProjectStateMigration = migration.migrated || interrupted;
   }
 
   private replaceCollaboration(snapshot: CollaborationSnapshot): void {
@@ -7763,6 +7787,7 @@ export class DesktopDesignerApplicationService {
           this.emit({ requestId: id, agentId: input.agentId, stage: 'thinking', message })
       };
       const generationContext = await this.resolveGenerationContext(projectId, generation);
+      if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       const patch = await adapter.propose({ ...proposal, generationContext });
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if (
@@ -7781,6 +7806,7 @@ export class DesktopDesignerApplicationService {
       });
       return await this.enqueueGraphOperation(() =>
         this.mutateDurably(async () => {
+          if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
           if (
             this.projectGeneration !== generation ||
             this.source.projectId !== projectId ||
@@ -7794,6 +7820,9 @@ export class DesktopDesignerApplicationService {
             createdAt: new Date().toISOString()
           });
           const evidence = await this.manualEditTransaction.compileWorkspace?.(candidateWorkspace);
+          // Cancellation can arrive while the compiler is awaiting its build.
+          // Discard that late result before staging or persisting a proposal.
+          if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
           if (evidence === undefined)
             throw new DesignerApplicationError('Agent proposal did not compile successfully.');
           const candidateFingerprint = digest(candidateWorkspace);
@@ -8451,6 +8480,12 @@ export class DesktopDesignerApplicationService {
   public cancel(value: unknown): void {
     const id = validateDesignerIdentifier(value, 'requestId');
     if (this.active?.id !== id) throw new DesignerApplicationError(`no active request: ${id}`);
+    // Once the durable write starts, its outcome cannot safely be cancelled.
+    // The user can still reject the saved proposal without applying its source.
+    if (this.pendingAIProposal?.requestId === id)
+      throw new DesignerApplicationError(
+        'The AI proposal is being saved. Reject it after saving finishes.'
+      );
     this.active.controller.abort();
   }
 

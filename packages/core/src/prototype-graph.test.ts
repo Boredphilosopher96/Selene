@@ -288,6 +288,180 @@ describe('PrototypeGraph contract', () => {
     ).toMatchObject({ expectedPath: ['orders', 'new-order'] });
   });
 
+  it('validates schema-limit scenario paths and rejects a missing late edge without mutation', () => {
+    const nodes = Array.from({ length: 500 }, (_node, index) => ({
+      id: `screen-${index}`,
+      kind: 'screen' as const,
+      label: `Screen ${index}`,
+      route: `/screen-${index}`,
+      position: { x: index * 100, y: 0 },
+      ports: Array.from({ length: 4 }, (_port, port) => ({
+        id: `next-${port}`,
+        label: `Next ${port}`,
+        trigger: 'click' as const
+      }))
+    }));
+    const candidate = {
+      ...prototypeGraphFixture,
+      initialNodeId: nodes[0]!.id,
+      nodes,
+      transitions: nodes.flatMap((node, index) =>
+        node.ports.map((port, offset) => ({
+          id: `navigate-${index}-${offset}`,
+          kind: 'navigate' as const,
+          from: { nodeId: node.id, portId: port.id },
+          to: { nodeId: nodes[(index + offset + 1) % nodes.length]!.id }
+        }))
+      ),
+      scenarios: Array.from({ length: 200 }, (_, index) => ({
+        id: `scenario-${index}`,
+        name: `Scenario ${index}`,
+        startNodeId: nodes[0]!.id,
+        expectedPath: nodes.map((node) => node.id)
+      }))
+    };
+    const original = structuredClone(candidate);
+    const parsed = parsePrototypeGraph(candidate);
+    expect(parsed).toEqual(original);
+    const removed = removePrototypeTransition(parsed, 'navigate-498-0');
+    expect(removed.scenarios.every((scenario) => scenario.expectedPath.length === 499)).toBe(true);
+    expect(candidate).toEqual(original);
+
+    expect(() =>
+      parsePrototypeGraph({
+        ...candidate,
+        transitions: candidate.transitions.filter(
+          (transition) => transition.id !== 'navigate-498-0'
+        ),
+        scenarios: candidate.scenarios.slice(0, 1)
+      })
+    ).toThrow('scenarios.0.expectedPath.499: scenario expectedPath contains an unwired transition');
+  });
+
+  it('retains alternate wires and recomputes wiring after edits to the same graph object', () => {
+    const graph = parsePrototypeGraph({
+      ...prototypeGraphFixture,
+      nodes: prototypeGraphFixture.nodes.map((node) =>
+        node.id === 'orders'
+          ? {
+              ...node,
+              ports: [...node.ports, { id: 'alternate', label: 'Alternate', trigger: 'click' }]
+            }
+          : node
+      ),
+      transitions: [
+        ...prototypeGraphFixture.transitions,
+        {
+          id: 'alternate-create',
+          kind: 'navigate',
+          from: { nodeId: 'orders', portId: 'alternate' },
+          to: { nodeId: 'new-order' }
+        }
+      ]
+    });
+    const removed = removePrototypeTransition(graph, 'create-order');
+    expect(removed.scenarios).toEqual(graph.scenarios);
+    const noAlternative = removePrototypeTransition(removed, 'alternate-create');
+    expect(noAlternative.scenarios[0]!.expectedPath).toEqual(['orders']);
+
+    graph.transitions = graph.transitions.filter(
+      (transition) => transition.id !== 'create-order' && transition.id !== 'alternate-create'
+    );
+    expect(() => parsePrototypeGraph(graph)).toThrow(/unwired transition/);
+  });
+
+  it('preserves first-match duplicate diagnostics and treats special names as literal IDs', () => {
+    try {
+      parsePrototypeGraph({
+        ...prototypeGraphFixture,
+        nodes: [
+          ...prototypeGraphFixture.nodes,
+          {
+            id: 'orders',
+            kind: 'overlay',
+            label: 'Duplicate',
+            position: { x: 0, y: 0 },
+            ports: [],
+            dismissible: true
+          }
+        ]
+      });
+      expect.fail('duplicate node IDs must be rejected');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PrototypeGraphValidationError);
+      expect((error as PrototypeGraphValidationError).issues).toEqual([
+        'nodes: node IDs must be unique'
+      ]);
+    }
+
+    const rename = (id: string) =>
+      id === 'orders' ? 'constructor' : id === 'new-order' ? 'toString' : id;
+    const graph = parsePrototypeGraph({
+      ...prototypeGraphFixture,
+      initialNodeId: rename(prototypeGraphFixture.initialNodeId),
+      nodes: prototypeGraphFixture.nodes.map((node) => ({
+        ...node,
+        id: rename(node.id),
+        ...(node.kind === 'state' ? { parentId: rename(node.parentId) } : {})
+      })),
+      transitions: prototypeGraphFixture.transitions.map((transition) => ({
+        ...transition,
+        from: { ...transition.from, nodeId: rename(transition.from.nodeId) },
+        ...('to' in transition ? { to: { nodeId: rename(transition.to.nodeId) } } : {})
+      })),
+      scenarios: prototypeGraphFixture.scenarios.map((scenario) => ({
+        ...scenario,
+        startNodeId: rename(scenario.startNodeId),
+        expectedPath: scenario.expectedPath.map(rename)
+      }))
+    });
+    expect(removePrototypeTransition(graph, 'create-order').scenarios[0]!.expectedPath).toEqual([
+      'constructor'
+    ]);
+  });
+
+  it('indexes state and overlay paths while back and reset remain destination-free', () => {
+    const graph = parsePrototypeGraph({
+      ...prototypeGraphFixture,
+      scenarios: [
+        {
+          id: 'mixed-path',
+          name: 'Mixed path',
+          startNodeId: 'orders',
+          expectedPath: ['orders', 'new-order', 'saved', 'saved']
+        },
+        {
+          id: 'state-path',
+          name: 'State path',
+          startNodeId: 'orders',
+          expectedPath: ['orders', 'orders-empty', 'orders-empty']
+        }
+      ]
+    });
+    expect(removePrototypeTransition(graph, 'dismiss-saved').scenarios[0]!.expectedPath).toEqual([
+      'orders',
+      'new-order',
+      'saved'
+    ]);
+    expect(removePrototypeTransition(graph, 'restore-orders').scenarios[1]!.expectedPath).toEqual([
+      'orders',
+      'orders-empty'
+    ]);
+    expect(() =>
+      parsePrototypeGraph({
+        ...prototypeGraphFixture,
+        scenarios: [
+          {
+            id: 'back-path',
+            name: 'Back path',
+            startNodeId: 'new-order',
+            expectedPath: ['new-order', 'orders']
+          }
+        ]
+      })
+    ).toThrow(/unwired transition/);
+  });
+
   it('rejects hostile fixture and browser-history snapshot input before runtime state changes', () => {
     let deep: unknown = 'leaf';
     for (let index = 0; index <= 16; index += 1) deep = { nested: deep };

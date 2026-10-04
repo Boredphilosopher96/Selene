@@ -1,3 +1,4 @@
+import { StudioIcon } from './studio-icon';
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 
 import type {
@@ -451,12 +452,16 @@ export function ContextualInspector({
     ? (safeInspectorValue(selectedName) ?? 'Current rendered React element')
     : unmappedTelemetry
       ? 'Unsupported rendered element'
-      : 'Nothing selected';
+      : graphNode
+        ? (safeInspectorValue(graphNode.label) ?? 'Prototype frame')
+        : 'Nothing selected';
   const inspectorHeaderCopy = sourceNode
     ? 'Inspect computed values and hand off this compiler-authenticated React context.'
     : unmappedTelemetry
       ? 'Read-only rendered DOM diagnostic. This element has no source mapping or edit authority.'
-      : 'Select a current compiler-authenticated rendered React element to inspect its details.';
+      : graphNode
+        ? 'Prototype frame context. Select a rendered React element to inspect its source-backed details.'
+        : 'Select a current compiler-authenticated rendered React element to inspect its details.';
   const sourceReference = reactSourceReference(sourceNode);
   const computedCss = telemetry ? computedCssSnippet(telemetry) : undefined;
   const sourceNodes = useMemo(
@@ -496,18 +501,22 @@ export function ContextualInspector({
     (selectedTarget ? 'Current rendered element' : 'No selection');
   const hasMatch = (values: readonly (string | undefined)[]) =>
     isInspectorSearchMatch(query, values);
-  const selectionMatches = hasMatch([
-    selectionName,
-    sourceNode?.path,
-    selectedTarget?.nodeRef,
-    selectedTargetOrigin,
-    ...renderedHierarchy.flatMap((entry) => [
-      entry.nodeId,
-      entry.semanticTag,
-      entry.label,
-      entry.sourcePath
-    ])
-  ]);
+  const selectionDetailsAvailable =
+    sourceNode !== undefined || selectedTarget !== undefined || unmappedTelemetry !== undefined;
+  const selectionMatches =
+    selectionDetailsAvailable &&
+    hasMatch([
+      selectionName,
+      sourceNode?.path,
+      selectedTarget?.nodeRef,
+      selectedTargetOrigin,
+      ...renderedHierarchy.flatMap((entry) => [
+        entry.nodeId,
+        entry.semanticTag,
+        entry.label,
+        entry.sourcePath
+      ])
+    ]);
   const connectionMatches =
     prototypeConnection !== undefined &&
     hasMatch([
@@ -541,7 +550,8 @@ export function ContextualInspector({
     ])
   );
   const catalogMatches = query.trim().length === 0 || catalogEntries.length > 0;
-  const handoffMatches = hasMatch(['AI edit', 'review comment', selectionName]);
+  const handoffMatches =
+    selectedTarget !== undefined && hasMatch(['AI edit', 'review comment', selectionName]);
   const hasAnyMatch =
     selectionMatches ||
     connectionMatches ||
@@ -937,7 +947,7 @@ export function ContextualInspector({
       aria-labelledby="inspector-tab-inspect"
       className="contextual-inspector guided-setup review-panel review-handoff-panel"
     >
-      <header className="review-panel__header">
+      <header className="review-panel__header" data-selection={hasDeveloperSelection || undefined}>
         <p className="conversation-history__eyebrow">Design · Inspect</p>
         <h2>{selectedNameForDisplay}</h2>
         <p>{inspectorHeaderCopy}</p>
@@ -1696,16 +1706,23 @@ export function ContextualInspector({
         ) : (
           <div className="dev-inspector__empty">
             <span className="dev-inspector__empty-glyph" aria-hidden="true">
-              ◫
+              <StudioIcon name="inspect" />
             </span>
-            <p>
-              Select a current compiler-authenticated rendered React element to reveal its
-              implementation details.
-            </p>
+            <strong>Explore the details</strong>
+            <p>Click a rendered element on the canvas to inspect its source-backed context.</p>
             <ul>
-              <li>Computed layout and visual styles</li>
-              <li>Semantic HTML and explicit ARIA metadata</li>
-              <li>React source, design-system provenance, and AI-ready context</li>
+              <li>
+                <StudioIcon name="canvas" />
+                <span>Layout & visual styles</span>
+              </li>
+              <li>
+                <StudioIcon name="shield" />
+                <span>HTML & accessibility metadata</span>
+              </li>
+              <li>
+                <StudioIcon name="sparkles" />
+                <span>React source & AI-ready context</span>
+              </li>
             </ul>
           </div>
         )}
@@ -1753,7 +1770,7 @@ export function ContextualInspector({
           </div>
         </details>
       ) : null}
-      {selectionMatches ? (
+      {selectionMatches && (sourceNode || selectedTarget || unmappedTelemetry) ? (
         <details className="guided-setup__manual-input" open>
           <summary>Selection and hierarchy</summary>
           <div>
@@ -1793,7 +1810,7 @@ export function ContextualInspector({
           </div>
         </details>
       ) : null}
-      {selectionMatches ? (
+      {selectionMatches && selectedTarget ? (
         <details className="guided-setup__manual-input" open>
           <summary>Measured preview data</summary>
           <div>
@@ -1932,7 +1949,7 @@ export function ContextualInspector({
           </div>
         </details>
       ) : null}
-      {handoffMatches ? (
+      {handoffMatches && selectedTarget ? (
         <details className="guided-setup__manual-input" open>
           <summary>Send this context</summary>
           <div>

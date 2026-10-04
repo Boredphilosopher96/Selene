@@ -359,7 +359,11 @@ persist the returned raw token. Inject a production HMAC/Ed25519 signer through
 `ShareTokenSigner` when replacing the host adapter.
 
 `GET /v1/projects/:id/export` returns a portable collaboration snapshot;
-`POST /v1/import` restores one. Backups should run that export for every
+`POST /v1/import` restores an existing project for an owner or admin. The
+`x-selene-expected-revision-id` header must name its current revision; stale
+fences return 409, and the snapshot cannot change the project's organization.
+Create the destination project and its initial revision before restoring into
+an isolated database. Backups should run that export for every
 project, encrypt the resulting artifacts, test restore into an isolated
 database, and retain only the window required by policy. Deletion uses the
 repository’s `deleteProject` operation; production deployments should implement

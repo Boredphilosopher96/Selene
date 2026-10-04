@@ -45,6 +45,11 @@ export interface PrototypeGraphRecoveryReceipt {
   readonly capturedSha256: string;
 }
 
+/** Commit canonical graph/review state before publishing recovery; undefined keeps legacy ownership. */
+export type PrototypeGraphRecoveryCommit = (
+  saved: PersistedPrototypeGraph
+) => Promise<PersistedPrototypeGraph | undefined>;
+
 /** Main-owned CAS boundary; renderers submit data but never select a disk path. */
 export interface PrototypeGraphPersistencePort {
   readonly commitsDesignerState?: true;
@@ -55,10 +60,12 @@ export interface PrototypeGraphPersistencePort {
     graph: PrototypeGraph,
     state?: LocalDesignerState
   ): Promise<PersistedPrototypeGraph>;
+  /** Legacy adapters must invoke commitRecovery before publishing or clearing the recovery fence. */
   recoverFromFixture(
     projectId: string,
     graph: PrototypeGraph,
-    state?: LocalDesignerState
+    state?: LocalDesignerState,
+    commitRecovery?: PrototypeGraphRecoveryCommit
   ): Promise<{
     readonly saved: PersistedPrototypeGraph;
     readonly receipt: PrototypeGraphRecoveryReceipt;
@@ -320,7 +327,9 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   }
   public async recoverFromFixture(
     projectId: string,
-    graph: PrototypeGraph
+    graph: PrototypeGraph,
+    _state?: LocalDesignerState,
+    commitRecovery?: PrototypeGraphRecoveryCommit
   ): Promise<{
     readonly saved: PersistedPrototypeGraph;
     readonly receipt: PrototypeGraphRecoveryReceipt;
@@ -365,7 +374,7 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         }
         evidence = await this.recoveryEvidence(recovery);
       }
-      // Rename is the recovery boundary. Evidence is bounded, while the
+      // Rename is the quarantine boundary. Evidence is bounded, while the
       // immutable quarantine remains intact if fixture replacement fails.
       await this.writeAtomically(
         `${recovery}.receipt.json`,
@@ -379,12 +388,20 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         0o700
       );
       const saved = { revision: 1, graph: parsePrototypeGraph(graph) };
-      // The marker and quarantine remain durable, so the next open cannot
-      // mistake an interrupted recovery for a missing project.
-      await this.writeAtomically(path, JSON.stringify(saved));
-      await rm(markerPath, { force: true });
+      // Keep the pending fence until the owner commits graph and review state.
+      // A failed canonical commit must never publish a recovered legacy graph.
+      const canonical = await commitRecovery?.(saved);
+      if (canonical !== undefined) {
+        // Canonical reads now bypass legacy storage. Cleanup failure must not
+        // report a committed recovery as rolled back; its fence remains safe.
+        await rm(markerPath, { force: true }).catch(() => undefined);
+      } else {
+        // Without a canonical owner, the fixture and marker are the boundary.
+        await this.writeAtomically(path, JSON.stringify(saved));
+        await rm(markerPath, { force: true });
+      }
       return {
-        saved,
+        saved: canonical ?? saved,
         receipt: {
           recoveryId,
           originalBytes: evidence.originalBytes,

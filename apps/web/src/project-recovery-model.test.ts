@@ -117,6 +117,12 @@ describe('encrypted browser project recovery', () => {
       body: JSON.stringify({ backup: value, expectedRevisionId: 'revision:current' })
     });
   });
+  it('rejects a valid backup returned for another project', async () => {
+    const client = createProjectRecoveryBrowserClient('https://service.test', async () =>
+      Response.json(backup())
+    );
+    await expect(client.backup('project:other', 7)).rejects.toThrow('another project');
+  });
   it.each([
     { snapshotSha256: 'b'.repeat(64) },
     { preservedAuditIds: [] },

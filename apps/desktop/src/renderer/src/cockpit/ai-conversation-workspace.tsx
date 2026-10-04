@@ -12,6 +12,7 @@ import type {
   DesignerSnapshot
 } from '../../../shared/designer-api';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
+import { applyAiProposalDecision, presentAiCancellationFailure } from './ai-proposal-presentation';
 import {
   canApplyConversationOperation,
   canStartConversationOperation,
@@ -326,19 +327,17 @@ export function AIConversationWorkspace({
     onStatusChange(operation === 'accept' ? 'Accepting proposal…' : 'Rejecting proposal…');
     void (async () => {
       try {
-        const next =
-          operation === 'accept'
-            ? await actions.acceptAIProposal(input)
-            : await actions.rejectAIProposal(input);
-        if (!isCurrent(token, projectId)) return;
-        onSnapshot(next);
-        await onRender(next);
-        if (isCurrent(token, projectId))
-          onStatusChange(
+        const message = await applyAiProposalDecision({
+          operation,
+          decide: () =>
             operation === 'accept'
-              ? `Accepted ${next.source.revision.id} and refreshed the canonical preview.`
-              : 'Rejected the proposal and restored the current design.'
-          );
+              ? actions.acceptAIProposal(input)
+              : actions.rejectAIProposal(input),
+          isCurrent: () => isCurrent(token, projectId),
+          onSnapshot,
+          onRender
+        });
+        if (message !== undefined) onStatusChange(message);
       } catch (error) {
         if (isCurrent(token, projectId)) onStatusChange(presentDesignerError(error, 'agent'));
       } finally {
@@ -473,7 +472,7 @@ export function AIConversationWorkspace({
       (error: unknown) => {
         if (projectIdRef.current === projectId && cancellingRequestRef.current === requestId) {
           clearCancellation(requestId);
-          onStatusChange(presentDesignerError(error, 'agent'));
+          onStatusChange(presentAiCancellationFailure(error));
           focusStatus();
         }
       }

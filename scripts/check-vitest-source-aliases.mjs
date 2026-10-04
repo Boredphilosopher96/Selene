@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import * as ts from 'typescript/unstable/ast';
+import { missingAliasEntries, sourceSpecifiers } from './vitest-source-aliases.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const subprocessTimeoutMs = 120_000;
@@ -62,47 +62,6 @@ async function testFiles(directory) {
   return files;
 }
 
-function sourceSpecifiers(source) {
-  if (typeof ts.createScanner !== 'function')
-    throw new Error('TypeScript structural scanner unavailable');
-  const scanner = ts.createScanner(true, ts.LanguageVariant.Standard, source);
-  const tokens = [];
-  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile; kind = scanner.scan())
-    if (kind !== ts.SyntaxKind.WhitespaceTrivia && kind !== ts.SyntaxKind.NewLineTrivia)
-      tokens.push({
-        kind,
-        text:
-          kind === ts.SyntaxKind.StringLiteral ? scanner.getTokenValue() : scanner.getTokenText()
-      });
-  const specifiers = [];
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (token.kind !== ts.SyntaxKind.ImportKeyword && token.kind !== ts.SyntaxKind.ExportKeyword)
-      continue;
-    const next = tokens[index + 1];
-    if (token.kind === ts.SyntaxKind.ImportKeyword && next?.kind === ts.SyntaxKind.StringLiteral) {
-      specifiers.push(next.text);
-      continue;
-    }
-    if (token.kind === ts.SyntaxKind.ImportKeyword && next?.kind === ts.SyntaxKind.OpenParenToken) {
-      if (tokens[index + 2]?.kind === ts.SyntaxKind.StringLiteral)
-        specifiers.push(tokens[index + 2].text);
-      continue;
-    }
-    for (let cursor = index + 1; cursor < tokens.length; cursor++) {
-      if (tokens[cursor].kind === ts.SyntaxKind.SemicolonToken) break;
-      if (
-        tokens[cursor].kind === ts.SyntaxKind.FromKeyword &&
-        tokens[cursor + 1]?.kind === ts.SyntaxKind.StringLiteral
-      ) {
-        specifiers.push(tokens[cursor + 1].text);
-        break;
-      }
-    }
-  }
-  return specifiers.filter((specifier) => specifier.startsWith('@selene/'));
-}
-
 const packages = await workspacePackages();
 const imports = new Map();
 for (const file of await testFiles(root)) {
@@ -110,19 +69,7 @@ for (const file of await testFiles(root)) {
   for (const specifier of sourceSpecifiers(source, file))
     imports.set(specifier, relative(root, file));
 }
-function missingAliasEntries(specifiers, availableAliases, workspaceNames) {
-  const missingEntries = [];
-  for (const [specifier, file] of specifiers) {
-    const packageName = specifier.split('/').slice(0, 2).join('/');
-    if (!workspaceNames.has(packageName)) continue;
-    const isExactPackageImport = specifier === packageName;
-    const covered =
-      availableAliases.has(specifier) ||
-      (isExactPackageImport && availableAliases.has(packageName));
-    if (!covered) missingEntries.push(`${specifier} (${file})`);
-  }
-  return missingEntries;
-}
+
 const missing = missingAliasEntries(imports, aliases, packages);
 if (missing.length > 0) throw new Error(`Vitest source aliases missing: ${missing.join(', ')}`);
 

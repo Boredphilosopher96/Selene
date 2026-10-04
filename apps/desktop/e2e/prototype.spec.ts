@@ -2192,17 +2192,33 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: nativeMoveBounds.x + 8,
         y: nativeMoveBounds.y + nativeMoveBounds.height / 2
       };
-      const nativeMoveDelta = { x: -31, y: 17 };
+      const siblingAlignmentBounds = await prototype
+        .locator('[data-selene-node-id="designer.summary"]')
+        .boundingBox();
+      const nativeSelectedBounds = await window.locator('.artifact-direct-selection').boundingBox();
+      if (!siblingAlignmentBounds || !nativeSelectedBounds)
+        throw new Error(
+          'Element alignment evidence requires the current mapped sibling and selection.'
+        );
+      // The studio toolbar changes the fitted artifact zoom. Aim at the observed
+      // compiler-mapped sibling, not a physical delta tied to yesterday's chrome.
+      // Keep the vertical leg beyond the pre-drag selection rectangle.
+      const nativeMoveDelta = {
+        x: siblingAlignmentBounds.x - nativeSelectedBounds.x,
+        y: nativeSelectedBounds.height + 8
+      };
       await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
       const moveEditStartedAt = Date.now();
       await window.mouse.down();
-      // Continue outside the transparent selected-rect hit plane; this exercises the
-      // native window mouse fallback used when Electron stops React pointer delivery.
-      await window.mouse.move(
-        nativeMoveStart.x + nativeMoveDelta.x,
-        nativeMoveStart.y + nativeMoveDelta.y,
-        { steps: 4 }
+      // Actual window mouse events must complete the edit beyond its initial rectangle.
+      const nativeMoveEndpoint = {
+        x: nativeMoveStart.x + nativeMoveDelta.x,
+        y: nativeMoveStart.y + nativeMoveDelta.y
+      };
+      expect(nativeMoveEndpoint.y).toBeGreaterThan(
+        nativeSelectedBounds.y + nativeSelectedBounds.height
       );
+      await window.mouse.move(nativeMoveEndpoint.x, nativeMoveEndpoint.y, { steps: 4 });
       await expect(manipulationGuides).toHaveAttribute('data-guide-mode', 'move');
       const expectedNativeMove = await manipulationGuides.evaluate((guides) => {
         const x = Number(guides.dataset.moveX);
@@ -2211,9 +2227,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           throw new Error('The active move guides did not expose finite snapped movement.');
         return { x, y };
       });
+      await test.info().attach('manual-native-element-alignment.json', {
+        body: JSON.stringify(
+          {
+            sibling: siblingAlignmentBounds,
+            selection: nativeSelectedBounds,
+            start: nativeMoveStart,
+            delta: nativeMoveDelta,
+            endpoint: nativeMoveEndpoint,
+            committedIntent: expectedNativeMove
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
       await expect(
         manipulationGuides
-          .locator('.artifact-alignment-guide[data-alignment-source="element"]')
+          .locator('.artifact-alignment-guide--vertical[data-alignment-source="element"]')
           .first()
       ).toBeVisible();
       await window.mouse.up();
@@ -2475,16 +2506,28 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByLabel('AI conversation history')
         .locator('[data-status="reviewing"]')
         .filter({ hasText: 'Record the post-baseline update.' });
+      const revisionComposerOrigin = await window.evaluate(() => performance.timeOrigin);
       await postBaselineProposal
         .getByRole('button', {
           name: 'Reject and revise AI proposal: Record the post-baseline update.',
           exact: true
         })
         .click();
+      // The textarea already held this instruction before rejection. Wait for
+      // the real revise/preview transaction to finish before reselecting; a
+      // transient hidden frame must not trigger the helper's reload fallback.
+      await expect(window.locator('.conversation-composer__status')).toHaveText(
+        'Proposal rejected. Edit the saved instruction, then send it as a new request.',
+        { timeout: previewPresentationTimeout }
+      );
       await expect(window.getByLabel('AI change instruction')).toHaveValue(
         'Record the post-baseline update.'
       );
       await selectMappedOrdersAction();
+      expect(await window.evaluate(() => performance.timeOrigin)).toBe(revisionComposerOrigin);
+      await expect(window.getByLabel('AI change instruction')).toHaveValue(
+        'Record the post-baseline update.'
+      );
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendRevisedPostBaselineChange = window.getByRole('button', {
@@ -2612,6 +2655,31 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
     } catch (error) {
+      const lifecycle = await window
+        .evaluate(async () => {
+          const current = await window.selene.designer.snapshot();
+          return {
+            projectId: current.source.projectId,
+            revision: current.source.revision.id,
+            pendingAIProposal: current.pendingAIProposal && {
+              requestId: current.pendingAIProposal.requestId,
+              candidateRevisionId: current.pendingAIProposal.candidateRevisionId
+            },
+            requests: current.aiChangeRequests.map(({ id, instruction, status }) => ({
+              id,
+              instruction,
+              status
+            })),
+            history: document
+              .querySelector('.conversation-history__requests')
+              ?.textContent?.slice(0, 2000),
+            composer: document.querySelector<HTMLTextAreaElement>(
+              '[aria-label="AI change instruction"]'
+            )?.value
+          };
+        })
+        .catch(() => undefined);
+      diagnostics.push(`final lifecycle: ${JSON.stringify(lifecycle)}`);
       throw failure(error);
     }
   } finally {

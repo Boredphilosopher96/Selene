@@ -16,6 +16,7 @@ import type { GeneratedProjectToolchainManifest } from './generated-project-tool
 import { deriveLocalCatalogComponents } from './local-component-catalog';
 import {
   containsPrivatePublicationMetadata,
+  validatePublicDesignBaseline,
   validatePublicPrototypeGraph
 } from './generated-publication-privacy';
 
@@ -27,14 +28,14 @@ function publicText(value: string): string {
 export function generatedPublicBaseline(bundle: ImmutablePublishBundle): DesignBaselineState {
   const state = parseSnapshot(bundle.collaborationSnapshot).designReviewState;
   if (state === undefined)
-    return {
+    return validatePublicDesignBaseline({
       projectId: bundle.projectId,
       readiness: 'draft',
       currency: 'none',
       approvalsStale: false,
       changesSinceBaseline: []
-    };
-  return {
+    });
+  return validatePublicDesignBaseline({
     projectId: state.projectId,
     readiness: state.readiness,
     currency: state.currency,
@@ -59,7 +60,7 @@ export function generatedPublicBaseline(bundle: ImmutablePublishBundle): DesignB
               promptDigest: change.provenance.promptDigest
             }
     }))
-  };
+  });
 }
 
 export function generatedReviewFiles(
