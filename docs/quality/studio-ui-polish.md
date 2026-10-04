@@ -188,3 +188,13 @@ samples both theme directions concurrently with immediate, unchanged axe audits;
 it retains every sampled color pair and rejects foreground/surface interpolation.
 No settled colors, typography, geometry or visual thresholds change. Exact-head
 hosted qualification remains required.
+
+The following hosted run at `0350dc157e0c23469a56f4d88a9fd827ef76ec67` passed
+the sampled theme contrast checks but caught a harness injection race in the
+presentation failure journey. Playwright 1.61.1's `addScriptTag` listens for
+page-wide CSP console errors while inserting a script; a newly mounted preview's
+warning about `frame-ancestors` in a meta policy could reject the unrelated axe
+insertion. Studio tests now preload axe once on the initial iframe-free launchpad
+and assert the same audit owner remains installed for every later strict audit.
+Preview CSP, console diagnostics, axe checks and production source are unchanged.
+Exact-head hosted qualification remains required.

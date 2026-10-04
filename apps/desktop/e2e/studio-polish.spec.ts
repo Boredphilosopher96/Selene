@@ -21,6 +21,15 @@ async function openStudio() {
   });
   const page = await application.firstWindow();
   await expect(page.getByRole('heading', { name: 'Start a local project' })).toBeVisible();
+  await expect(page.locator('iframe')).toHaveCount(0);
+  // Install once before preview frames exist. Playwright's addScriptTag listens
+  // for page-wide CSP errors, including unrelated warnings from child previews.
+  const axeScript = await page.addScriptTag({
+    content: await readFile(require.resolve('axe-core/axe.min.js'), 'utf8')
+  });
+  await axeScript.evaluate((script) => {
+    script.dataset.seleneStudioAxe = 'true';
+  });
   return { application, page, userData };
 }
 
@@ -30,11 +39,12 @@ async function closeStudio(studio: Awaited<ReturnType<typeof openStudio>>) {
 }
 
 async function expectAccessible(page: Page) {
-  await page.addScriptTag({
-    content: await readFile(require.resolve('axe-core/axe.min.js'), 'utf8')
-  });
+  await expect(page.locator('script[data-selene-studio-axe]')).toHaveCount(1);
   const violations = await page.evaluate(async () => {
     const axe = (window as typeof window & { axe: typeof import('axe-core') }).axe;
+    if (!axe || typeof axe.run !== 'function') {
+      throw new Error('The studio document lost its preloaded accessibility audit owner');
+    }
     const result = await axe.run(document, {
       runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa'] }
     });
