@@ -93,7 +93,10 @@ import * as history from '@selene/collaboration/history';
 import * as identity from '@selene/collaboration/identity';
 declare const context: root.CollaborationHostContext;
 const options = {} as service.ServiceOptions;
-void [context, options, postgres, history, identity];
+declare const handler: service.CollaborationServiceHandler;
+const rateLimited: Response | undefined = handler.rateLimit(new Request('https://service.test'));
+const ordinaryResponse: Promise<Response> = handler(new Request('https://service.test'));
+void [context, options, rateLimited, ordinaryResponse, postgres, history, identity];
 `
       );
       writeFileSync(

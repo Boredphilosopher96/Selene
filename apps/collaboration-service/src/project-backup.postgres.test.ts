@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import type { CollaborationSnapshot } from '@selene/collaboration';
+import type { AuditEvent, CollaborationSnapshot } from '@selene/collaboration';
 import { BunPostgresCollaborationRepository } from './postgres-repository';
 import { BunPostgresProjectBackupStore } from './postgres-project-backup';
 import { createProjectBackupHttpHandler } from './project-backup-service';
@@ -23,7 +23,10 @@ const tenant = id(1, 1),
   r2 = id(4, 2),
   threadId = id(5, 1),
   commentId = id(6, 1),
-  auditId = id(7, 1);
+  auditId = id(7, 1),
+  readinessAuditId = id(7, 2),
+  baselineId = id(8, 1),
+  otherTenant = id(1, 2);
 const createdAt = '2026-09-30T12:00:00.000Z';
 const snapshot: CollaborationSnapshot = {
   format: 'selene-collaboration/v2',
@@ -110,12 +113,13 @@ postgres('real PostgreSQL project backup and recovery', () => {
       allowedOrigins: []
     });
     await sql`INSERT INTO organizations (id, slug, name) VALUES (${tenant}, 'team-recovery-fixture', 'Recovery fixture') ON CONFLICT (id) DO NOTHING`;
+    await sql`INSERT INTO organizations (id, slug, name) VALUES (${otherTenant}, 'team-recovery-other-tenant', 'Other recovery tenant') ON CONFLICT (id) DO NOTHING`;
     await sql`INSERT INTO users (id, organization_id, email, display_name) VALUES (${owner}, ${tenant}, 'owner@fixture.invalid', 'Fixture owner'), (${editor}, ${tenant}, 'editor@fixture.invalid', 'Fixture editor') ON CONFLICT (id) DO NOTHING`;
     await sql`INSERT INTO memberships (organization_id, user_id, role) VALUES (${tenant}, ${owner}, 'owner'), (${tenant}, ${editor}, 'editor') ON CONFLICT (organization_id, user_id) DO NOTHING`;
   });
   beforeEach(async () => {
     await repository.replaceProject(snapshot);
-    await sql`DELETE FROM audit_events WHERE organization_id = ${tenant}`;
+    await sql`DELETE FROM audit_events WHERE organization_id IN (${tenant}, ${otherTenant})`;
     await repository.appendAudit(initialAudit);
   });
   afterAll(async () => {
@@ -149,6 +153,154 @@ postgres('real PostgreSQL project backup and recovery', () => {
     if (response === undefined) throw new Error('Backup route was not handled');
     return response;
   };
+  const markReady = async (
+    intent: 'review' | 'handoff' = 'review',
+    readyId = baselineId,
+    readyAuditId = readinessAuditId
+  ) => {
+    const environment = readServiceEnvironment({
+      COLLABORATION_STORE: 'postgres',
+      DATABASE_URL: databaseUrl,
+      COLLABORATION_AUTH_MODE: 'proxy',
+      COLLABORATION_PROXY_SECRET: proxySecret,
+      COLLABORATION_SHARE_SECRET: 'disposable-readiness-share-secret-2026'
+    });
+    const application = createCollaborationApplication(environment, repository, repository);
+    const response = await application.fetch(
+      new Request(`http://service.test/v1/projects/${projectId}/readiness`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          id: readyId,
+          intent,
+          revisionId: r1,
+          revisionFingerprint: snapshot.revisions[0]!.contentSha256
+        })
+      })
+    );
+    expect(response.status).toBe(201);
+    const event = (await repository.listEvents(projectId, 0, 1000))
+      .filter((entry) => entry.type === 'design.ready' && entry.resourceId === readyId)
+      .at(-1);
+    if (event === undefined) throw new Error('Readiness event was not persisted');
+    expect(event).toMatchObject({
+      actorId: owner,
+      resourceType: 'design_baseline',
+      resourceId: readyId,
+      payload: { intent, revisionId: r1 }
+    });
+    // Readiness emits a cursor event; seed a separate immutable audit record
+    // to exercise recovery of actual persisted design_baseline audit history.
+    const audit: AuditEvent = {
+      id: readyAuditId,
+      organizationId: tenant,
+      actorId: owner,
+      action: event.type,
+      resourceType: event.resourceType,
+      resourceId: event.resourceId,
+      metadata: event.payload,
+      occurredAt: event.occurredAt
+    };
+    await repository.appendAudit(audit);
+    const persisted = await sql<
+      Record<string, unknown>[]
+    >`SELECT * FROM audit_events WHERE id = ${readyAuditId}`;
+    const readySnapshot = await repository.exportProject(projectId);
+    if (persisted[0] === undefined || readySnapshot === undefined)
+      throw new Error('Readiness audit and snapshot were not persisted');
+    return { audit, persisted: persisted[0], snapshot: readySnapshot };
+  };
+  it.each(['review', 'handoff'] as const)(
+    'round-trips the complete immutable %s readiness audit through encrypted backup and database restore',
+    async (intent) => {
+      const historical = await markReady('review', id(8, 2), id(7, 3));
+      const ready = await markReady(intent);
+      await repository.appendAudit({
+        ...ready.audit,
+        id: id(7, 4),
+        resourceId: id(8, 3)
+      });
+      const { actorId: _actor, ...actorlessAudit } = ready.audit;
+      await repository.appendAudit({
+        ...actorlessAudit,
+        id: id(7, 5),
+        organizationId: otherTenant
+      });
+      const backup = await store.backup(projectId, owner, 30);
+      expect(backup.document.snapshot.designReviewState?.baseline?.id).toBe(baselineId);
+      expect(backup.document.audits).toEqual([initialAudit, ready.audit]);
+      expect(backup.document.audits).not.toContainEqual(historical.audit);
+      const encrypted = await encryptProjectBackup(backup, 'disposable-passphrase-2026');
+      expect(encrypted).not.toContain(baselineId);
+      expect(encrypted).not.toContain(readinessAuditId);
+      const decrypted = await decryptProjectBackup(encrypted, 'disposable-passphrase-2026');
+      expect(decrypted.document.audits).toEqual(backup.document.audits);
+      await repository.replaceProject(snapshot);
+      await changedRevision();
+      await sql`DELETE FROM audit_events WHERE id IN (${auditId}, ${readinessAuditId})`;
+      const response = await restore(decrypted, r2);
+      expect(response.status).toBe(200);
+      const receipt = await response.json();
+      expect(receipt.preservedAuditIds).toEqual([auditId, readinessAuditId]);
+      const reopenedSql = new Bun.SQL(databaseUrl!);
+      try {
+        const reopened = new BunPostgresCollaborationRepository(reopenedSql);
+        expect(projectSnapshotIdentity((await reopened.exportProject(projectId))!)).toBe(
+          projectSnapshotIdentity(ready.snapshot)
+        );
+        const restored = await reopenedSql<
+          Record<string, unknown>[]
+        >`SELECT * FROM audit_events WHERE id = ${readinessAuditId}`;
+        expect(restored).toEqual([ready.persisted]);
+      } finally {
+        await reopenedSql.close({ timeout: 1 });
+      }
+    }
+  );
+  it('excludes readiness audit resources when the backed-up projection has no baseline', async () => {
+    const ready = await markReady();
+    await repository.replaceProject(snapshot);
+    const backup = await store.backup(projectId, owner, 30);
+    expect(backup.document.snapshot.designReviewState?.baseline).toBeUndefined();
+    expect(backup.document.audits).toEqual([initialAudit]);
+    expect(backup.document.audits).not.toContainEqual(ready.audit);
+  });
+  it('rejects conflicting readiness audit contents before changing the snapshot', async () => {
+    await markReady();
+    const backup = await store.backup(projectId, owner, 30);
+    await repository.replaceProject(snapshot);
+    await changedRevision();
+    const before = projectSnapshotIdentity((await repository.exportProject(projectId))!);
+    await sql`UPDATE audit_events SET metadata = '{"intent":"changed"}'::jsonb WHERE id = ${readinessAuditId}`;
+    expect((await restore(backup, r2)).status).toBe(409);
+    expect(projectSnapshotIdentity((await repository.exportProject(projectId))!)).toBe(before);
+    expect(await sql`SELECT metadata FROM audit_events WHERE id = ${readinessAuditId}`).toEqual([
+      { metadata: { intent: 'changed' } }
+    ]);
+  });
+  it('rolls back a restored baseline and readiness audit when the final audit insert fails', async () => {
+    await markReady();
+    const backup = await store.backup(projectId, owner, 30);
+    await repository.replaceProject(snapshot);
+    await changedRevision();
+    const before = projectSnapshotIdentity((await repository.exportProject(projectId))!);
+    await sql`DELETE FROM audit_events WHERE id = ${readinessAuditId}`;
+    await sql.unsafe(
+      "CREATE FUNCTION team_readiness_reject_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.action = 'project.backup-restored' THEN RAISE EXCEPTION 'PRIVATE FAILURE DETAIL'; END IF; RETURN NEW; END $$; CREATE TRIGGER team_readiness_reject_audit BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION team_readiness_reject_audit();"
+    );
+    try {
+      const response = await restore(backup, r2);
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe('{"error":"recovery_unavailable"}');
+      expect(projectSnapshotIdentity((await repository.exportProject(projectId))!)).toBe(before);
+      expect(await sql`SELECT id FROM audit_events WHERE id = ${readinessAuditId}`).toHaveLength(0);
+      expect(await sql`SELECT id FROM design_baselines WHERE id = ${baselineId}`).toHaveLength(0);
+    } finally {
+      await sql.unsafe(
+        'DROP TRIGGER team_readiness_reject_audit ON audit_events; DROP FUNCTION team_readiness_reject_audit();'
+      );
+    }
+  });
   it('round-trips encrypted persisted revision/comment/tenant/audit identities through a new database connection', async () => {
     const backup = await store.backup(projectId, owner, 30);
     const encrypted = await encryptProjectBackup(backup, 'disposable-passphrase-2026');
@@ -170,7 +322,7 @@ postgres('real PostgreSQL project backup and recovery', () => {
       restoredRevisionId: r1,
       preservedAuditIds: [auditId]
     });
-    const reopenedSql = new Bun.SQL(databaseUrl);
+    const reopenedSql = new Bun.SQL(databaseUrl!);
     try {
       const reopened = new BunPostgresCollaborationRepository(reopenedSql);
       expect(projectSnapshotIdentity((await reopened.exportProject(projectId))!)).toBe(

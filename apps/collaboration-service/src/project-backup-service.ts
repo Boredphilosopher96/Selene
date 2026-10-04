@@ -1,4 +1,8 @@
-import { CollaborationError, type CollaborationHostContextFactory } from '@selene/collaboration';
+import {
+  CollaborationError,
+  type CollaborationHostContext,
+  type CollaborationHostContextFactory
+} from '@selene/collaboration';
 import type { CollaborationAuthorizer } from '@selene/collaboration/service';
 import type { IdentityProvider } from './auth.js';
 import {
@@ -25,6 +29,8 @@ export interface ProjectBackupHttpOptions {
   readonly store: ProjectBackupStore;
   readonly authorizer: CollaborationAuthorizer;
   readonly identityProvider: IdentityProvider;
+  /** The composed application's shared request budget, after trusted authentication. */
+  readonly rateLimit?: (request: Request, actorId: string | undefined) => Response | undefined;
   readonly hostContextFactory: CollaborationHostContextFactory;
   readonly allowedOrigins: readonly string[];
 }
@@ -113,14 +119,25 @@ export function createProjectBackupHttpHandler(options: ProjectBackupHttpOptions
         headers.set('access-control-allow-headers', 'content-type');
         return new Response(null, { status: 204, headers });
       }
-      const context = options.hostContextFactory.create({
-        signal: request.signal,
-        timeoutMs: 15_000
-      });
+      let context: CollaborationHostContext | undefined;
       try {
         const actorId = await options.identityProvider.authenticate(request);
+        const limited = options.rateLimit?.(request, actorId);
+        if (limited !== undefined) {
+          const limitedHeaders = new Headers(limited.headers);
+          for (const [key, value] of headers) limitedHeaders.set(key, value);
+          return new Response(limited.body, { status: limited.status, headers: limitedHeaders });
+        }
+        if (actorId === undefined)
+          throw new CollaborationError(
+            'FORBIDDEN',
+            'Project recovery requires owner or admin access'
+          );
+        context = options.hostContextFactory.create({
+          signal: request.signal,
+          timeoutMs: 15_000
+        });
         if (
-          actorId === undefined ||
           !(await context.runPort(options.authorizer, 'authorize', () =>
             options.authorizer.authorize(
               { userId: actorId, action: 'project:restore', projectId },
@@ -204,7 +221,7 @@ export function createProjectBackupHttpHandler(options: ProjectBackupHttpOptions
           }
         );
       } finally {
-        context.dispose();
+        context?.dispose();
       }
     }
   };

@@ -86,6 +86,17 @@ export interface ServiceOptions {
   readonly hostedReviewBindings?: HostedReviewBindingResolver;
 }
 
+export interface CollaborationServiceHandler {
+  (request: Request): Promise<Response>;
+  /**
+   * Consume this service's configured budget for a route handled by the host.
+   * Supply the same trusted identity headers as ordinary service requests and
+   * call once instead of invoking the service handler for that request.
+   * Returns the shared 429 response when exhausted; OPTIONS consumes no budget.
+   */
+  readonly rateLimit: (request: Request) => Response | undefined;
+}
+
 interface Metrics {
   requests: number;
   rejected: number;
@@ -921,7 +932,7 @@ function semanticChange(value: unknown): SemanticDesignChangeInput | undefined {
  */
 export function createCollaborationService(
   sourceOptions: ServiceOptions
-): (request: Request) => Promise<Response> {
+): CollaborationServiceHandler {
   const options = captureServiceOptions(sourceOptions);
   const clock = options.clock;
   const maximum = options.maximum;
@@ -1131,6 +1142,13 @@ export function createCollaborationService(
     return rate.count <= maximum;
   }
 
+  function rateLimit(request: Request): Response | undefined {
+    metrics.requests += 1;
+    if (request.method === 'OPTIONS' || allowed(request)) return undefined;
+    metrics.rejected += 1;
+    return cors(request, json({ error: 'rate_limited' }, 429, { 'retry-after': '60' }));
+  }
+
   function cursor(value: string | null): number {
     if (value === null || value === '') return 0;
     const parsed = Number(value);
@@ -1245,13 +1263,10 @@ export function createCollaborationService(
     return userId;
   }
 
-  return async (request) => {
-    metrics.requests += 1;
+  const handler = async (request: Request): Promise<Response> => {
+    const limited = rateLimit(request);
+    if (limited !== undefined) return limited;
     if (request.method === 'OPTIONS') return cors(request, new Response(null, { status: 204 }));
-    if (!allowed(request)) {
-      metrics.rejected += 1;
-      return cors(request, json({ error: 'rate_limited' }, 429, { 'retry-after': '60' }));
-    }
     let context: CollaborationHostContext | undefined;
     try {
       context = createHostContext({
@@ -2678,4 +2693,5 @@ export function createCollaborationService(
       }
     }
   };
+  return Object.assign(handler, { rateLimit });
 }
