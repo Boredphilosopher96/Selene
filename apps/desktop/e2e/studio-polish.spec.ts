@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type Page } from '@playwright/test';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -47,6 +47,103 @@ async function expectAccessible(page: Page) {
     }));
   });
   expect(violations).toEqual([]);
+}
+
+async function expectAtomicThemeChange(page: Page, theme: 'dark' | 'light') {
+  // Sample natural painted frames concurrently with the immediate axe audit.
+  // A settled endpoint alone misses unsafe foreground/background interpolation.
+  const sampling = page.evaluate(async (nextTheme) => {
+    const main = document.querySelector<HTMLElement>('main')!;
+    const controls = Array.from(
+      main.querySelectorAll<HTMLButtonElement>('.sl-button, .sl-icon-button')
+    ).filter((button) => !button.disabled && button.getBoundingClientRect().width > 0);
+    const luminance = (color: string) => {
+      const values = color.match(/^rgba?\(([^)]+)\)$/)?.[1].split(',');
+      const channels = values?.map((value) => Number(value.trim()));
+      if (
+        !values ||
+        values.some((value) => value.trim() === '') ||
+        !channels ||
+        (channels.length !== 3 && channels.length !== 4) ||
+        channels.some((channel) => !Number.isFinite(channel) || channel < 0 || channel > 255) ||
+        (channels.length === 4 && channels[3] !== 1)
+      ) {
+        throw new Error(`Expected an opaque RGB control color, received ${color}`);
+      }
+      const linear = channels.slice(0, 3).map((channel) => {
+        const value = channel / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+    };
+    const read = () =>
+      controls.map((button) => {
+        const style = getComputedStyle(button);
+        const foreground = luminance(style.color);
+        const background = luminance(style.backgroundColor);
+        return {
+          label: button.textContent?.trim() || button.getAttribute('aria-label'),
+          color: style.color,
+          backgroundColor: style.backgroundColor,
+          contrastRatio:
+            (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05),
+          transitionProperty: style.transitionProperty
+        };
+      });
+    if (nextTheme === 'dark') main.dataset.theme = 'dark';
+    else delete main.dataset.theme;
+    const started = performance.now();
+    const samples = [{ elapsed: 0, controls: read() }];
+    await new Promise<void>((resolve, reject) => {
+      const sample = () => {
+        try {
+          samples.push({ elapsed: performance.now() - started, controls: read() });
+          if (performance.now() - started >= 200) resolve();
+          else requestAnimationFrame(sample);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      requestAnimationFrame(sample);
+    });
+    return { theme: nextTheme, samples };
+  }, theme);
+  let receipt: Awaited<typeof sampling>;
+  try {
+    await expectAccessible(page);
+  } finally {
+    receipt = await sampling;
+    const path = test.info().outputPath(`studio-theme-${theme}-paint-colors.json`);
+    await writeFile(path, JSON.stringify(receipt, null, 2));
+    await test.info().attach(`studio-theme-${theme}-paint-colors`, {
+      path,
+      contentType: 'application/json'
+    });
+  }
+  expect(receipt.samples.length).toBeGreaterThanOrEqual(2);
+  expect(receipt.samples[0].controls.length).toBeGreaterThan(0);
+  for (const sample of receipt.samples) {
+    for (const control of sample.controls) {
+      expect(
+        control.contrastRatio,
+        `${theme}: ${control.label} at ${sample.elapsed}ms`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  }
+  for (const [index, control] of receipt.samples[0].controls.entries()) {
+    const properties = control.transitionProperty.split(',').map((value) => value.trim());
+    expect(properties).not.toContain('all');
+    expect(properties).not.toContain('color');
+    expect(properties).not.toContain('background-color');
+    expect(properties).toContain('box-shadow');
+    expect(properties).toContain('transform');
+    for (const sample of receipt.samples) {
+      expect(sample.controls[index].color, `${theme}: ${control.label}`).toBe(control.color);
+      expect(sample.controls[index].backgroundColor, `${theme}: ${control.label}`).toBe(
+        control.backgroundColor
+      );
+    }
+  }
 }
 
 async function expectContained(page: Page, selector: string, withinViewportBlock = true) {
@@ -138,11 +235,9 @@ test('studio launchpad supports keyboard templates, blank-name refusal and a lon
     });
     await page.screenshot({ path: testInfo.outputPath('studio-launchpad-wide.png') });
     await expectAccessible(page);
-    await page.locator('main').evaluate((element) => {
-      element.dataset.theme = 'dark';
-    });
-    await expectAccessible(page);
+    await expectAtomicThemeChange(page, 'dark');
     await page.screenshot({ path: testInfo.outputPath('studio-launchpad-dark.png') });
+    await expectAtomicThemeChange(page, 'light');
     await page.locator('main').evaluate((element) => {
       delete element.dataset.theme;
       element.dataset.contrast = 'more';

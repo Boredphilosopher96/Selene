@@ -176,3 +176,15 @@ The Inspector drawer and scrim also anchor to the actual workspace row instead
 of assuming a fixed 76px chrome offset; the expanded-header fixture checks their
 exact top/bottom alignment and accessibility. One-row headers retain their
 minimum geometry; affected overlay captures require exact hosted verification.
+
+The following hosted macOS run at `2e509ab0531c4a5bd2f1f9af9917723878972e71`
+passed the responsive header and overlay checks but caught transient launchpad
+contrast failure during a theme change. Shared button styles interpolated both
+foreground and background for 140ms between individually accessible palettes.
+A natural painted-frame cloud reproduction captured the same primary pair,
+`#767287` on `#9686f0`, at 86ms. Studio-scoped buttons now switch those colors
+atomically while retaining border, shadow and transform motion. The native test
+samples both theme directions concurrently with immediate, unchanged axe audits;
+it retains every sampled color pair and rejects foreground/surface interpolation.
+No settled colors, typography, geometry or visual thresholds change. Exact-head
+hosted qualification remains required.

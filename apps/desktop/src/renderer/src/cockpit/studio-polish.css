@@ -40,6 +40,12 @@ body:has(> #root > .designer-workspace) {
   vertical-align: middle;
 }
 
+/* Opposing theme foreground/surface palettes must switch together. Interpolating
+   each color independently briefly destroys text contrast between safe endpoints. */
+.designer-workspace.sl-theme :is(.sl-button, .sl-icon-button) {
+  transition-property: border-color, box-shadow, transform;
+}
+
 .designer-workspace.sl-theme .workspace-topbar {
   height: auto;
   min-height: 50px;
