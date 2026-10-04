@@ -54,6 +54,14 @@ function withRequestId(response: Response, requestId: string): Response {
   return new Response(response.body, { status: response.status, headers });
 }
 
+function trustedIdentityHeaders(request: Request, identity: string | undefined): Headers {
+  const headers = new Headers(request.headers);
+  headers.delete('x-selene-user-id');
+  headers.delete('x-selene-proxy-secret');
+  if (identity) headers.set('x-selene-user-id', identity);
+  return headers;
+}
+
 export function createCollaborationApplication(
   environment: ServiceEnvironment,
   repository: CollaborationRepository,
@@ -105,6 +113,14 @@ export function createCollaborationApplication(
           store: projectBackupStore,
           authorizer,
           identityProvider,
+          rateLimit: (request, identity) =>
+            handler.rateLimit(
+              // Budget admission needs only headers; preserve the original restore body stream.
+              new Request(request.url, {
+                method: request.method,
+                headers: trustedIdentityHeaders(request, identity)
+              })
+            ),
           hostContextFactory: createHostEffectContextFactory(),
           allowedOrigins: environment.corsOrigins
         });
@@ -149,11 +165,7 @@ export function createCollaborationApplication(
       const recoveryResponse = await recovery?.fetch(request);
       if (recoveryResponse !== undefined) return withRequestId(recoveryResponse, requestId);
       const identity = await identityProvider.authenticate(request);
-      const headers = new Headers(request.headers);
-      headers.delete('x-selene-user-id');
-      headers.delete('x-selene-proxy-secret');
-      if (identity) headers.set('x-selene-user-id', identity);
-      const enriched = new Request(request, { headers });
+      const enriched = new Request(request, { headers: trustedIdentityHeaders(request, identity) });
       const started = performance.now();
       const response = await handler(enriched);
       console.info(

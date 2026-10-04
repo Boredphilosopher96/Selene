@@ -72,7 +72,8 @@ export function projectBackupResourceIds(snapshot: CollaborationSnapshot): reado
         ...item.messages.map((message) => message.id)
       ]),
       ...snapshot.aiChangeRequests.map((item) => item.id),
-      ...snapshot.developerAnnotations.map((item) => item.id)
+      ...snapshot.developerAnnotations.map((item) => item.id),
+      ...(snapshot.designReviewState?.baseline ? [snapshot.designReviewState.baseline.id] : [])
     ])
   ];
 }
