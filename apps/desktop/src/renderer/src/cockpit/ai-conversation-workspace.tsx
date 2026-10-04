@@ -19,6 +19,7 @@ import {
   isHostRequestActive,
   isConversationBusy,
   isCurrentProjectProgress,
+  manualHistoryActionLabel,
   requestInput,
   requestOutcome,
   targetSummary
@@ -91,6 +92,9 @@ export function AIConversationWorkspace({
   const [selectionMinting, setSelectionMinting] = useState(false);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | undefined>(undefined);
   const [undoingRequestId, setUndoingRequestId] = useState<string | undefined>(undefined);
+  const [manualHistoryOperation, setManualHistoryOperation] = useState<'undo' | 'redo' | undefined>(
+    undefined
+  );
   const [undoStatus, setUndoStatus] = useState<string | undefined>(undefined);
   const [proposalOperation, setProposalOperation] = useState<
     'preview' | 'accept' | 'reject' | 'revise' | undefined
@@ -194,6 +198,7 @@ export function AIConversationWorkspace({
     setSelectionMinting(false);
     undoSubmittingRef.current = false;
     setUndoingRequestId(undefined);
+    setManualHistoryOperation(undefined);
     setUndoStatus(undefined);
     setProposalOperation(undefined);
     setVisibleRequestCount(12);
@@ -531,6 +536,7 @@ export function AIConversationWorkspace({
     const projectId = snapshot.source.projectId;
     undoSubmittingRef.current = true;
     setUndoingRequestId(activityId);
+    setManualHistoryOperation(operation);
     setUndoStatus('Compiling a compensating manual revision…');
     onBusyChange(true);
     void (async () => {
@@ -561,6 +567,7 @@ export function AIConversationWorkspace({
         if (isCurrent(token, projectId)) {
           undoSubmittingRef.current = false;
           setUndoingRequestId(undefined);
+          setManualHistoryOperation(undefined);
           onBusyChange(false);
           requestAnimationFrame(() => undoStatusRef.current?.focus());
         }
@@ -692,7 +699,12 @@ export function AIConversationWorkspace({
                                 )
                               }
                             >
-                              {undoingRequestId === activity.id ? 'Undoing…' : 'Undo manual change'}
+                              {manualHistoryActionLabel(
+                                'undo',
+                                undoingRequestId === activity.id
+                                  ? manualHistoryOperation
+                                  : undefined
+                              )}
                             </button>
                             {manualRedo ? (
                               <button
@@ -711,7 +723,12 @@ export function AIConversationWorkspace({
                                   )
                                 }
                               >
-                                Redo manual change
+                                {manualHistoryActionLabel(
+                                  'redo',
+                                  undoingRequestId === activity.id
+                                    ? manualHistoryOperation
+                                    : undefined
+                                )}
                               </button>
                             ) : null}
                             {!undoEligible ? (
@@ -1059,7 +1076,7 @@ export function AIConversationWorkspace({
             {safeDesignerNotice(undoStatus, 'AI undo status is unavailable. Try the change again.')}
           </p>
         ) : null}
-        {progress && progressBelongsToCurrentProject ? (
+        {progress && progressBelongsToCurrentProject && isHostRequestActive(progress) ? (
           <p className="conversation-progress" aria-live="polite">
             AI update in progress…
           </p>

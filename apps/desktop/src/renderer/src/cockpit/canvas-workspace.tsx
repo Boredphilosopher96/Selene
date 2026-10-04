@@ -21,6 +21,7 @@ import {
 } from '@xyflow/react';
 import {
   removePrototypeTransition,
+  serializeCanonicalData,
   upsertPrototypeTransition,
   type PrototypeGraph,
   type PrototypeNode,
@@ -50,9 +51,11 @@ import {
 import {
   applyCanvasPreviewGesture,
   canvasShortcutAction,
+  canvasConnectionSelectionChanged,
   catalogEntryCanDrag,
   catalogInsertAvailability,
   projectGraphEdges,
+  type CanvasConnectionSelectionObservation,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
 import {
@@ -146,6 +149,8 @@ interface CanvasWorkspaceProps {
   readonly saveStatus: string;
   /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
   readonly viewportLayoutKey: string;
+  /** Parent-owned dismissal is local only; it must not re-enter host selection clearing. */
+  readonly selectionClearEpoch: number;
   readonly activeNodeId?: string;
   readonly catalogManifest: DesignerSnapshot['componentCatalog']['manifest'];
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
@@ -817,6 +822,7 @@ export function CanvasWorkspace({
   readOnly,
   saveStatus,
   viewportLayoutKey,
+  selectionClearEpoch,
   activeNodeId,
   catalogManifest,
   catalogEntries,
@@ -1701,7 +1707,59 @@ export function CanvasWorkspace({
     [graph.nodes, graph.transitions, mode]
   );
   const [edges, setEdges] = useState<Edge[]>(graphEdges);
-  useEffect(() => setEdges(graphEdges), [graphEdges]);
+  const edgeProjectFence = useRef(projectFence);
+  useEffect(() => {
+    const currentFence = edgeProjectFence.current;
+    edgeProjectFence.current = projectFence;
+    // A host refresh may arrive after a newer local wire selection. Reproject
+    // topology without losing that selection, but never carry it into another
+    // project/graph whose edge IDs happen to overlap.
+    setEdges((current) =>
+      projectGraphEdges(graphEdges, current, [], { currentFence, graphFence: projectFence })
+    );
+  }, [graphEdges, projectFence]);
+
+  const observedConnectionSelection = useRef<CanvasConnectionSelectionObservation | undefined>(
+    undefined
+  );
+  const observedSelectionClearEpoch = useRef(selectionClearEpoch);
+  useEffect(() => {
+    if (observedSelectionClearEpoch.current === selectionClearEpoch) return;
+    observedSelectionClearEpoch.current = selectionClearEpoch;
+    observedConnectionSelection.current = undefined;
+    setSelectedNodeId('');
+    setNodes((current) => current.map((node) => ({ ...node, selected: false })));
+    setEdges((current) => current.map((edge) => ({ ...edge, selected: false })));
+    setSelectedConnectionId(undefined);
+    setConnectionEditorOpen(false);
+    // The parent already cleared inspect context. Do not notify it or the host
+    // again: the capture-phase Escape owner intentionally consumed the key.
+  }, [selectionClearEpoch]);
+  useEffect(() => {
+    const selectedEdgeId = edges.find((edge) => edge.selected)?.id;
+    const transition = graph.transitions.find((item) => item.id === selectedEdgeId);
+    if (
+      selectedEdgeId === undefined ||
+      transition === undefined ||
+      `${graph.project.projectId}:${graph.id}` !== projectFence
+    ) {
+      observedConnectionSelection.current = undefined;
+      return;
+    }
+    const selection = connectionSelection(graph, transition);
+    const next = {
+      projectFence,
+      selectedEdgeId,
+      signature: serializeCanonicalData(selection)
+    };
+    const previous = observedConnectionSelection.current;
+    observedConnectionSelection.current = next;
+    if (canvasConnectionSelectionChanged(previous, next))
+      reportConnectionSelection.current(selection);
+    // SelectionListener compares IDs, so reconnect/undo can retain selection
+    // without emitting a new callback. Refresh only changed inspect semantics;
+    // reportSelectedEdge would also reopen a deliberately closed editor.
+  }, [edges, graph, projectFence]);
 
   const graphEditingAllowed = useRef(false);
   graphEditingAllowed.current = !readOnly && mode === 'design' && surface === 'canvas';
@@ -1899,6 +1957,7 @@ export function CanvasWorkspace({
   };
   const clearCanvasSelection = useCallback(() => {
     setSelectedNodeId('');
+    setEdges((current) => current.map((edge) => ({ ...edge, selected: false })));
     setConnectionEditorOpen(false);
     reportSelectedEdge();
     onNodeSelectionChange(undefined);

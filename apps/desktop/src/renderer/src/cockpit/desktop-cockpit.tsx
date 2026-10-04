@@ -1999,6 +1999,7 @@ export function DesktopCockpit({
           }
           saveStatus={graphSaveStatus}
           viewportLayoutKey={`${layoutMode}:${effectiveLeftCollapsed ? 'left-closed' : leftWidth}:${rightCollapsed ? 'right-closed' : rightWidth}`}
+          selectionClearEpoch={previewSelectionClearEpoch ?? 0}
           {...(snapshot.editablePrototype.runtime
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}

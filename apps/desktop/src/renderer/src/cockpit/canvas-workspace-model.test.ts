@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyCanvasPreviewGesture,
   canvasShortcutAction,
+  canvasConnectionSelectionChanged,
   catalogEntryCanDrag,
   catalogInsertAvailability,
   catalogInsertTarget,
@@ -10,6 +11,70 @@ import {
 } from './canvas-workspace-model';
 
 describe('canvas workspace interaction model', () => {
+  it('refreshes only changed semantics for a surviving selected connection', () => {
+    const previous = {
+      projectFence: 'project-a:graph-a',
+      selectedEdgeId: 'dashboard-orders',
+      signature: 'destination:dashboard'
+    };
+    const next = { ...previous, signature: 'destination:orders' };
+    expect(canvasConnectionSelectionChanged(previous, next)).toBe(true);
+    expect(canvasConnectionSelectionChanged(next, previous)).toBe(true);
+    expect(canvasConnectionSelectionChanged(next, { ...next })).toBe(false);
+    expect(canvasConnectionSelectionChanged(undefined, next)).toBe(false);
+    expect(
+      canvasConnectionSelectionChanged(previous, { ...next, selectedEdgeId: 'other-edge' })
+    ).toBe(false);
+    expect(
+      canvasConnectionSelectionChanged(previous, { ...next, projectFence: 'project-b:graph-a' })
+    ).toBe(false);
+  });
+
+  it('retains selected surviving edges across same-graph topology refreshes', () => {
+    const current = [
+      { id: 'dashboard-orders', source: 'dashboard', target: 'orders', selected: true },
+      { id: 'removed', source: 'orders', target: 'dashboard', selected: true }
+    ];
+    const graphEdges = [
+      { id: 'dashboard-orders', source: 'dashboard', target: 'dashboard' },
+      { id: 'new-edge', source: 'orders', target: 'dashboard' }
+    ];
+    const next = projectGraphEdges(graphEdges, current, [], {
+      currentFence: 'project-a:graph-a',
+      graphFence: 'project-a:graph-a'
+    });
+    expect(next).toEqual([{ ...graphEdges[0], selected: true }, graphEdges[1]]);
+    expect(next.some((edge) => edge.id === 'removed')).toBe(false);
+    expect(current[0]?.target).toBe('orders');
+  });
+
+  it('honors explicit deselection after a host edge refresh', () => {
+    const graphEdges = [{ id: 'dashboard-orders', source: 'dashboard', target: 'dashboard' }];
+    const current = [{ ...graphEdges[0]!, selected: true }];
+    expect(
+      projectGraphEdges(graphEdges, current, [
+        { type: 'select', id: 'dashboard-orders', selected: false }
+      ])
+    ).toEqual([{ ...graphEdges[0], selected: false }]);
+  });
+
+  it('resets local edge selection when a project or graph fence changes', () => {
+    const graphEdges = [{ id: 'dashboard-orders', source: 'dashboard', target: 'orders' }];
+    const current = [{ ...graphEdges[0]!, selected: true }];
+    expect(
+      projectGraphEdges(graphEdges, current, [], {
+        currentFence: 'project-a:graph-a',
+        graphFence: 'project-b:graph-a'
+      })
+    ).toEqual(graphEdges);
+    expect(
+      projectGraphEdges(graphEdges, current, [], {
+        currentFence: 'project-a:graph-a',
+        graphFence: 'project-a:graph-b'
+      })
+    ).toEqual(graphEdges);
+  });
+
   it('reprojects host graph edges after transient flow reset/remove churn', () => {
     type EdgeFixture = {
       id: string;
