@@ -41,12 +41,25 @@ body:has(> #root > .designer-workspace) {
 }
 
 .designer-workspace.sl-theme .workspace-topbar {
-  height: 50px;
+  height: auto;
   min-height: 50px;
   padding-inline: 18px;
   border-bottom-color: #30394f;
   background: #192136;
   box-shadow: inset 0 1px #ffffff0c;
+}
+
+/* Overlay the actual workspace row, not an assumed 50px chrome offset.
+   Intrinsic wrapped headers and short viewports keep their controls exposed. */
+.designer-workspace.sl-theme .workspace-layout[data-layout-mode='inspector-drawer'] {
+  position: relative;
+}
+
+.designer-workspace.sl-theme
+  .workspace-layout[data-layout-mode='inspector-drawer']
+  > :is(.workspace-inspector-drawer, .workspace-inspector-drawer-scrim) {
+  position: absolute;
+  inset: 0;
 }
 
 .designer-workspace.sl-theme .workspace-project-identity {

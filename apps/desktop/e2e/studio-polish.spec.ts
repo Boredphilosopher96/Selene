@@ -71,6 +71,40 @@ async function expectContained(page: Page, selector: string, withinViewportBlock
   }
 }
 
+async function captureHeaderGeometry(page: Page) {
+  return page.locator('.workspace-topbar').evaluate((header) => {
+    const bounds = header.getBoundingClientRect();
+    const buttons = Array.from(header.querySelectorAll('button')).map((button) => ({
+      label: button.textContent?.trim(),
+      rect: button.getBoundingClientRect().toJSON(),
+      clientWidth: button.clientWidth,
+      clientHeight: button.clientHeight,
+      scrollWidth: button.scrollWidth,
+      scrollHeight: button.scrollHeight
+    }));
+    return {
+      bounds: bounds.toJSON(),
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        clientWidth: document.documentElement.clientWidth,
+        clientHeight: document.documentElement.clientHeight,
+        devicePixelRatio: window.devicePixelRatio
+      },
+      buttons,
+      overflow: buttons.flatMap(({ label, rect }) => {
+        if (rect.width === 0 || rect.height === 0) return [];
+        return rect.left < bounds.left ||
+          rect.right > bounds.right + 1 ||
+          rect.top < bounds.top ||
+          rect.bottom > bounds.bottom + 1
+          ? [label]
+          : [];
+      })
+    };
+  });
+}
+
 test('studio launchpad supports keyboard templates, blank-name refusal and a long project name', async () => {
   const testInfo = test.info();
   const studio = await openStudio();
@@ -157,37 +191,7 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
           requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
         );
       });
-      const headerGeometry = await page.locator('.workspace-topbar').evaluate((header) => {
-        const bounds = header.getBoundingClientRect();
-        const buttons = Array.from(header.querySelectorAll('button')).map((button) => ({
-          label: button.textContent?.trim(),
-          rect: button.getBoundingClientRect().toJSON(),
-          clientWidth: button.clientWidth,
-          clientHeight: button.clientHeight,
-          scrollWidth: button.scrollWidth,
-          scrollHeight: button.scrollHeight
-        }));
-        return {
-          bounds: bounds.toJSON(),
-          viewport: {
-            width: window.innerWidth,
-            height: window.innerHeight,
-            clientWidth: document.documentElement.clientWidth,
-            clientHeight: document.documentElement.clientHeight,
-            devicePixelRatio: window.devicePixelRatio
-          },
-          buttons,
-          overflow: buttons.flatMap(({ label, rect }) => {
-            if (rect.width === 0 || rect.height === 0) return [];
-            return rect.left < bounds.left ||
-              rect.right > bounds.right + 1 ||
-              rect.top < bounds.top ||
-              rect.bottom > bounds.bottom + 1
-              ? [label]
-              : [];
-          })
-        };
-      });
+      const headerGeometry = await captureHeaderGeometry(page);
       await testInfo.attach(`studio-header-geometry-${width}.json`, {
         body: JSON.stringify(headerGeometry, null, 2),
         contentType: 'application/json'
@@ -222,6 +226,74 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
       await expectContained(page, '.canvas-workspace__toolbar > output');
       await page.screenshot({ path: testInfo.outputPath(`studio-canvas-${width}.png`) });
     }, Promise.resolve());
+    // Simulate wider native glyph metrics within this disposable document,
+    // without modifying system fonts. Wrapped chrome must grow intrinsically.
+    await page.setViewportSize({ width: 768, height: 900 });
+    const widerChrome = await page.addStyleTag({
+      content:
+        '.workspace-topbar button { font-family: monospace !important; font-size: 15px !important; }'
+    });
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        )
+    );
+    const wrapped = await captureHeaderGeometry(page);
+    await testInfo.attach('studio-header-wider-font-768.json', {
+      body: JSON.stringify(wrapped, null, 2),
+      contentType: 'application/json'
+    });
+    await page.screenshot({ path: testInfo.outputPath('studio-header-wider-font-768.png') });
+    expect(wrapped.bounds.height).toBeGreaterThan(50);
+    expect(wrapped.overflow).toEqual([]);
+    expect(
+      (await page.locator('.canvas-workspace .react-flow').boundingBox())?.height
+    ).toBeGreaterThan(40);
+    await page.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    await expect(
+      page.getByRole('dialog', { name: 'Compact inspector workspace', exact: true })
+    ).toBeVisible();
+    const overlay = await page.locator('.workspace-layout').evaluate((layout) => ({
+      workspace: layout.getBoundingClientRect().toJSON(),
+      drawer: layout.querySelector('.workspace-inspector-drawer')!.getBoundingClientRect().toJSON(),
+      scrim: layout
+        .querySelector('.workspace-inspector-drawer-scrim')!
+        .getBoundingClientRect()
+        .toJSON()
+    }));
+    await testInfo.attach('studio-header-expanded-inspector-768.json', {
+      body: JSON.stringify(overlay, null, 2),
+      contentType: 'application/json'
+    });
+    await page.screenshot({
+      path: testInfo.outputPath('studio-header-expanded-inspector-768.png')
+    });
+    expect(overlay.drawer.top).toBe(overlay.workspace.top);
+    expect(overlay.drawer.left).toBe(overlay.workspace.left);
+    expect(overlay.drawer.right).toBe(overlay.workspace.right);
+    expect(overlay.drawer.bottom).toBe(overlay.workspace.bottom);
+    expect(overlay.scrim.top).toBe(overlay.workspace.top);
+    expect(overlay.scrim.left).toBe(overlay.workspace.left);
+    expect(overlay.scrim.right).toBe(overlay.workspace.right);
+    expect(overlay.scrim.bottom).toBe(overlay.workspace.bottom);
+    expect(overlay.drawer.top).toBeGreaterThanOrEqual(wrapped.bounds.bottom);
+    await expectAccessible(page);
+    await page.keyboard.press('Escape');
+    await expect(
+      page.getByRole('dialog', { name: 'Compact inspector workspace', exact: true })
+    ).toBeHidden();
+    // Recreate the former fixed-height constraint to prove this fixture
+    // rejects the actual clipping, rather than merely exercising a resize.
+    await page.locator('.workspace-topbar').evaluate((header) => {
+      header.style.height = '50px';
+    });
+    const fixedHeight = await captureHeaderGeometry(page);
+    expect(fixedHeight.overflow.length).toBeGreaterThan(0);
+    await page.locator('.workspace-topbar').evaluate((header) => {
+      header.style.removeProperty('height');
+    });
+    await widerChrome.evaluate((style) => style.remove());
     await page.setViewportSize({ width: 1180, height: 812 });
     await page.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
     const expectConversationHeader = async () => {

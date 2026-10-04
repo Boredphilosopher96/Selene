@@ -164,3 +164,15 @@ so its exact cause is unverified. Native viewport measurements now wait for font
 readiness and two paint frames, then retain raw header/button/viewport geometry
 and a failure screenshot before applying the unchanged containment predicate.
 The next hosted run must establish whether this synchronization is sufficient.
+
+The following exact-head hosted run at `4d9d59a9a74695c2849ba8d6cfc6b8d859cfeff5`
+retained the missing header evidence. At 768px its two-row controls occupied 68px
+inside the studio's fixed 50px header, centering the first row above the window
+and spilling the second into status feedback. The fix restores intrinsic
+`height: auto` with the existing 50px minimum. An in-document wider-font native
+fixture reproduces the old constraint's clipping without changing system fonts,
+then checks full containment and positive canvas space with the corrected layout.
+The Inspector drawer and scrim also anchor to the actual workspace row instead
+of assuming a fixed 76px chrome offset; the expanded-header fixture checks their
+exact top/bottom alignment and accessibility. One-row headers retain their
+minimum geometry; affected overlay captures require exact hosted verification.
