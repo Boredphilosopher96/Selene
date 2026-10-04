@@ -10,6 +10,7 @@ import {
   assertNativeElectronTestAllowed,
   harnessIdentity
 } from '../../../scripts/playwright-harness.mjs';
+import { inspectorTabHasUsableGeometry } from '../../../scripts/inspector-tab-geometry.mjs';
 
 test.beforeAll(() => assertNativeElectronTestAllowed());
 
@@ -964,6 +965,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const style = getComputedStyle(tab);
           return {
             bottom: rect.bottom,
+            clientHeight: tab.clientHeight,
+            clientWidth: tab.clientWidth,
             height: rect.height,
             label: tab.textContent?.trim(),
             left: rect.left,
@@ -999,16 +1002,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'Setup'
       ]);
       expect(inspectorTabGeometry.overlaps).toEqual([]);
-      expect(
-        inspectorTabGeometry.tabs.every(
-          (tab) =>
-            tab.visible &&
-            tab.width >= 100 &&
-            tab.height >= 34 &&
-            tab.scrollWidth <= tab.width &&
-            tab.scrollHeight <= tab.height
-        )
-      ).toBe(true);
+      expect(inspectorTabGeometry.tabs.every(inspectorTabHasUsableGeometry)).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const establishDashboardScenario = async () => {
         const dashboard = prototype.getByRole('heading', { name: /dashboard/i });

@@ -137,3 +137,30 @@ the opposite open rail's toggle. A narrowly scoped open-conversation override
 keeps its header horizontal and 32px high. Native checks now assert computed
 writing mode, 32–40px geometry before and after resizing, accessibility, and an
 AI-open screenshot before the inspector collapses that rail.
+
+## Hosted runner follow-up
+
+Hosted Verify run 37183122134 at published source
+`513c0a3ea0cd8deecd4b0a09fdfc5e2d962112e7` (tree
+`07ef019fecadc13be6e04ae747776fc98616cc8d`), artifact 11295638597,
+produced 29 passing visual tests and four reviewed studio-only baseline
+changes. Only the three provisional Linux cockpit captures and
+`component-explorer-wide` are replaced with exact pinned Playwright Chrome 149
+Ubuntu actual bytes. The explorer's 770×823 to 766×818 crop is consistent with
+the deliberate 10px center-stage padding and 27px status strip. Typography remains
+scoped to `designer-workspace.sl-theme`. Other foundation/Darwin snapshots,
+thresholds, masks and visual assertions are unchanged. New exact-head hosted
+verification remains required.
+
+The hosted macOS tab receipt measured 102.65625–102.671875px physical widths and
+34px heights, with no overlap; integer `scrollWidth` rounded to 103. The test now
+keeps the exact, unrounded 100×34px target bounds while comparing integer
+scroll/client dimensions for overflow. Five regressions preserve rejection of
+1px real overflow, smaller physical targets and invalid measurements. No layout
+change or pixel tolerance is needed for that metric correction.
+
+The separate hosted header-containment failure had no retained original trace,
+so its exact cause is unverified. Native viewport measurements now wait for font
+readiness and two paint frames, then retain raw header/button/viewport geometry
+and a failure screenshot before applying the unchanged containment predicate.
+The next hosted run must establish whether this synchronization is sufficient.

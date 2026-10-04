@@ -149,20 +149,53 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
       await page.setViewportSize({ width, height: 900 });
       const tools = page.getByRole('toolbar', { name: 'Canvas tools' });
       await expect(tools).toBeVisible();
-      const headerOverflow = await page.locator('.workspace-topbar').evaluate((header) => {
-        const bounds = header.getBoundingClientRect();
-        return Array.from(header.querySelectorAll('button')).flatMap((button) => {
-          const rect = button.getBoundingClientRect();
-          if (rect.width === 0 || rect.height === 0) return [];
-          return rect.left < bounds.left ||
-            rect.right > bounds.right + 1 ||
-            rect.top < bounds.top ||
-            rect.bottom > bounds.bottom + 1
-            ? [button.textContent?.trim()]
-            : [];
-        });
+      // Native window resizing and React/media-query projection settle on
+      // paint frames, not merely when the viewport command is acknowledged.
+      await page.evaluate(async () => {
+        await document.fonts.ready;
+        await new Promise<void>((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+        );
       });
-      expect(headerOverflow).toEqual([]);
+      const headerGeometry = await page.locator('.workspace-topbar').evaluate((header) => {
+        const bounds = header.getBoundingClientRect();
+        const buttons = Array.from(header.querySelectorAll('button')).map((button) => ({
+          label: button.textContent?.trim(),
+          rect: button.getBoundingClientRect().toJSON(),
+          clientWidth: button.clientWidth,
+          clientHeight: button.clientHeight,
+          scrollWidth: button.scrollWidth,
+          scrollHeight: button.scrollHeight
+        }));
+        return {
+          bounds: bounds.toJSON(),
+          viewport: {
+            width: window.innerWidth,
+            height: window.innerHeight,
+            clientWidth: document.documentElement.clientWidth,
+            clientHeight: document.documentElement.clientHeight,
+            devicePixelRatio: window.devicePixelRatio
+          },
+          buttons,
+          overflow: buttons.flatMap(({ label, rect }) => {
+            if (rect.width === 0 || rect.height === 0) return [];
+            return rect.left < bounds.left ||
+              rect.right > bounds.right + 1 ||
+              rect.top < bounds.top ||
+              rect.bottom > bounds.bottom + 1
+              ? [label]
+              : [];
+          })
+        };
+      });
+      await testInfo.attach(`studio-header-geometry-${width}.json`, {
+        body: JSON.stringify(headerGeometry, null, 2),
+        contentType: 'application/json'
+      });
+      if (headerGeometry.overflow.length > 0)
+        await page.screenshot({ path: testInfo.outputPath(`studio-header-overflow-${width}.png`) });
+      // Preserve the original same-unit physical containment predicate.
+      expect(headerGeometry.overflow).toEqual([]);
       await expectContained(page, '.canvas-workspace__toolbar');
       await expectContained(page, '.canvas-workspace__tools');
       await Promise.all(

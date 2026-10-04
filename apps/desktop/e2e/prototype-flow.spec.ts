@@ -275,8 +275,15 @@ interface ArtboardDragEventEvidence {
 interface ArtboardDragSample {
   readonly checkpoint: string;
   readonly className: string;
+  readonly handleBounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
   readonly style: string | null;
   readonly transform: string;
+  readonly viewportTransform: string | null;
   readonly mode: string | null | undefined;
   readonly events: readonly ArtboardDragEventEvidence[];
 }
@@ -299,8 +306,24 @@ async function dragArtboard(
   await expect
     .poll(
       async () => {
-        const candidate = await handle.boundingBox();
-        if (!candidate) return false;
+        // fitView queues measured nodes and advances its animation on paint
+        // frames. Wall-clock polls can repeatedly read unchanged geometry while
+        // those frames are stalled on a hosted native display.
+        const candidate = await handle.evaluate(async (element) => {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const bounds = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            bounds.x + bounds.width / 2,
+            bounds.y + bounds.height / 2
+          );
+          return {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            ownsCenter: hit !== null && (hit === element || element.contains(hit))
+          };
+        });
         const settled =
           previousBounds !== undefined &&
           previousBounds !== null &&
@@ -310,24 +333,18 @@ async function dragArtboard(
           Math.abs(candidate.height - previousBounds.height) < 0.25;
         previousBounds = candidate;
         stableSamples = settled ? stableSamples + 1 : 0;
-        const ownsCenter = await handle.evaluate((element, bounds) => {
-          const hit = document.elementFromPoint(
-            bounds.x + bounds.width / 2,
-            bounds.y + bounds.height / 2
-          );
-          return hit !== null && (hit === element || element.contains(hit));
-        }, candidate);
-        return stableSamples >= 3 && ownsCenter;
+        return stableSamples >= 3 && candidate.ownsCenter;
       },
       {
         intervals: [80],
+        timeout: 5_000,
         message: 'Artboard drag handle should settle and own its pointer hit after canvas framing.'
       }
     )
     .toBe(true);
   const bounds = await handle.boundingBox();
   if (!bounds) throw new Error('Artboard drag handle has no physical bounds.');
-  const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  let start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
   const hitOwnership = () =>
     handle.evaluate((element, point) => {
       const hit = document.elementFromPoint(point.x, point.y);
@@ -382,19 +399,31 @@ async function dragArtboard(
   });
   const samples: ArtboardDragSample[] = [];
   const sample = async (checkpoint: string) => {
-    const result = await artboard.evaluate(
-      (node, name) => ({
+    const result = await artboard.evaluate((node, name) => {
+      const sampledHandle = node.querySelector(
+        '.canvas-artboard__drag-handle, .canvas-artboard__label'
+      );
+      const sampledBounds = sampledHandle?.getBoundingClientRect();
+      return {
         checkpoint: name,
         className: node.getAttribute('class') ?? '',
+        handleBounds: sampledBounds
+          ? {
+              x: sampledBounds.x,
+              y: sampledBounds.y,
+              width: sampledBounds.width,
+              height: sampledBounds.height
+            }
+          : null,
         style: node.getAttribute('style'),
         transform: (node as HTMLElement).style.transform,
+        viewportTransform: node.closest('.react-flow__viewport')?.getAttribute('style') ?? null,
         mode: node.closest('[aria-label="Design canvas"]')?.getAttribute('data-mode'),
         events: JSON.parse(
           node.getAttribute('data-selene-drag-events') ?? '[]'
         ) as ArtboardDragEventEvidence[]
-      }),
-      checkpoint
-    );
+      };
+    }, checkpoint);
     samples.push(result);
     return result;
   };
@@ -410,10 +439,30 @@ async function dragArtboard(
   let evidence = '';
   try {
     const before = await sample('before pointer delivery');
-    await page.mouse.move(start.x, start.y);
+    // Native locator hover waits for painted stability and resolves the current
+    // handle, rather than delivering a pointer to an earlier viewport center.
+    await handle.hover({ timeout: 5_000 });
     // The native iframe compositor workaround is activated by header hover.
     // Geometry can already be stable before that hover state has been painted.
     await settlePaint();
+    const hoverDelivery = await sample('native handle hover delivered');
+    const nativeHover = [...hoverDelivery.events]
+      .reverse()
+      .find(
+        (event) =>
+          event.captureTarget === 'window' &&
+          event.type === 'pointermove' &&
+          event.isTrusted &&
+          event.ownedByHandle &&
+          event.buttons === 0
+      );
+    if (!nativeHover)
+      throw new Error(
+        `Native hover must reach this artboard handle: ${JSON.stringify(hoverDelivery)}`
+      );
+    // Continue from the point that actually received native input, including
+    // any framing that completed during the locator's actionability wait.
+    start = { x: nativeHover.clientX, y: nativeHover.clientY };
     hoveredHitOwnership = await hitOwnership();
     expect(hoveredHitOwnership.ownedByHandle, JSON.stringify(hoveredHitOwnership)).toBe(true);
     expect(hoveredHitOwnership.hovered, JSON.stringify(hoveredHitOwnership)).toBe(true);

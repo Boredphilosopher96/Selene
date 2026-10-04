@@ -172,9 +172,9 @@ jobs:
         with:
           name: desktop-flow-failure-${{ github.run_id }}
           path: |
-            apps/desktop/test-results/prototype-flow-*/error-context.md
-            apps/desktop/test-results/prototype-flow-*/trace.zip
-            apps/desktop/test-results/prototype-flow-*/test-failed-*.png
+            apps/desktop/test-results/**/error-context.md
+            apps/desktop/test-results/**/trace.zip
+            apps/desktop/test-results/**/test-failed-*.png
             apps/desktop/test-results/prototype-flow-*/attachments/desktop-startup-output.txt
             apps/desktop/test-results/prototype-flow-*/workspace-toolbar-diagnostics-evidence.json
             apps/desktop/test-results/prototype-flow-*/attachments/workspace-toolbar-diagnostics-evidence.json
