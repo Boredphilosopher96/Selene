@@ -3408,7 +3408,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
     const secondUndo = await window.evaluate(async () => window.selene.designer.snapshot());
     expect(secondUndo.source.files).toEqual(beforeRemoval.source.files);
-    const evidencePath = test.info().outputPath('remove-undo-reload-evidence.json');
+    const evidencePath = test.info().outputPath('manual-source-history-evidence.json');
     await writeFile(
       evidencePath,
       JSON.stringify(
@@ -3427,7 +3427,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
         2
       )
     );
-    await test.info().attach('remove-undo-reload-evidence.json', {
+    await test.info().attach('manual-source-history-evidence.json', {
       path: evidencePath,
       contentType: 'application/json'
     });
