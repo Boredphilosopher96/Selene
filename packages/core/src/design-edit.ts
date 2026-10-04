@@ -42,7 +42,7 @@ export interface DesignEditTarget {
   readonly operation: DesignRevisionOperationTarget;
   /** Compiler-issued source anchor; never a CSS selector, DOM path, or file system path. */
   readonly sourceAnchorId: string;
-  /** Required for remove/reorder (target is the child); absent for insert (target is the parent container). */
+  /** Required for structural child edits; absent for insert (target is the parent container). */
   readonly parentSourceAnchorId?: string;
 }
 
@@ -142,6 +142,16 @@ export type DesignEditCommand =
       readonly position: 'first' | 'last' | { readonly beforeSourceAnchorId: string };
     }
   | { readonly kind: 'remove-node'; readonly target: DesignEditTarget }
+  | {
+      /** Clones a host-verified static subtree immediately after its source sibling. */
+      readonly kind: 'duplicate-node';
+      readonly target: DesignEditTarget;
+      /** Complete compiler marker inventory; the host mints every destination identity. */
+      readonly sourceAnchorRemaps: readonly {
+        readonly fromSourceAnchorId: string;
+        readonly toSourceAnchorId: string;
+      }[];
+    }
   | {
       readonly kind: 'reorder-child';
       readonly target: DesignEditTarget;
@@ -681,6 +691,33 @@ function parseCommand(value: unknown, revision: DesignRevision): DesignEditComma
       const target = parseTarget(input.target, revision);
       return Object.freeze({ kind: 'remove-node', target });
     }
+    case 'duplicate-node': {
+      const input = exact(value, ['kind', 'target', 'sourceAnchorRemaps']);
+      const target = parseTarget(input.target, revision);
+      const remaps = denseArray(input.sourceAnchorRemaps);
+      if (remaps.length === 0 || remaps.length > 64) fail();
+      const sourceAnchorRemaps = remaps.map((entry) => {
+        const remap = exact(entry, ['fromSourceAnchorId', 'toSourceAnchorId']);
+        return Object.freeze({
+          fromSourceAnchorId: text(remap.fromSourceAnchorId),
+          toSourceAnchorId: text(remap.toSourceAnchorId)
+        });
+      });
+      const originals = new Set(sourceAnchorRemaps.map((entry) => entry.fromSourceAnchorId));
+      if (
+        originals.size !== sourceAnchorRemaps.length ||
+        new Set(sourceAnchorRemaps.map((entry) => entry.toSourceAnchorId)).size !==
+          sourceAnchorRemaps.length ||
+        !originals.has(target.sourceAnchorId) ||
+        sourceAnchorRemaps.some((entry) => originals.has(entry.toSourceAnchorId))
+      )
+        fail();
+      return Object.freeze({
+        kind: 'duplicate-node',
+        target,
+        sourceAnchorRemaps: Object.freeze(sourceAnchorRemaps)
+      });
+    }
     case 'reorder-child': {
       const input = exact(value, ['kind', 'target', 'position']);
       const target = parseTarget(input.target, revision);
@@ -816,7 +853,43 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
   const preconditionCommitments = preconditions.map((precondition) => JSON.stringify(precondition));
   if (new Set(preconditionCommitments).size !== preconditionCommitments.length) fail();
   /** Host resolves these compiler anchors and applies a structural batch sequentially in one atomic transaction. */
+  const introducedAnchors = new Set<string>();
   for (const command of commands) {
+    const freshAnchors =
+      command.kind === 'duplicate-node'
+        ? command.sourceAnchorRemaps.map((entry) => entry.toSourceAnchorId)
+        : command.kind === 'insert-child'
+          ? [command.newSourceAnchorId]
+          : [];
+    for (const anchor of freshAnchors) {
+      if (introducedAnchors.has(anchor)) fail();
+      introducedAnchors.add(anchor);
+    }
+    if (command.kind === 'duplicate-node') {
+      const required = [
+        command.target.parentSourceAnchorId,
+        ...command.sourceAnchorRemaps.map((entry) => entry.fromSourceAnchorId)
+      ];
+      if (
+        required.some(
+          (anchor) =>
+            anchor === undefined ||
+            !preconditions.some(
+              (entry) => entry.kind === 'node-exists' && entry.sourceAnchorId === anchor
+            )
+        )
+      )
+        fail();
+      if (
+        command.sourceAnchorRemaps.some((remap) =>
+          preconditions.some(
+            (entry) =>
+              entry.kind === 'node-exists' && entry.sourceAnchorId === remap.toSourceAnchorId
+          )
+        )
+      )
+        fail();
+    }
     if (command.kind === 'insert-child') {
       if (command.target.parentSourceAnchorId !== undefined) fail();
       if (
@@ -848,6 +921,7 @@ export function parseDesignEditProposal(value: unknown): DesignEditProposal {
     }
     if (
       command.kind === 'remove-node' ||
+      command.kind === 'duplicate-node' ||
       command.kind === 'reorder-child' ||
       command.kind === 'reparent-child'
     ) {

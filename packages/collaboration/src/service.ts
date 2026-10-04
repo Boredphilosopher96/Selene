@@ -2508,31 +2508,45 @@ export function createCollaborationService(
         const existing = await repository<Project | undefined>(request, 'getProject', [
           snapshot.project.id
         ]);
-        const userId = await requireUserAuthorization(
-          request,
-          existing ? 'project:design' : 'organization:create-project',
-          existing
-            ? { projectId: snapshot.project.id }
-            : { organizationId: snapshot.project.organizationId }
-        );
+        if (!existing) throw new CollaborationError('NOT_FOUND', 'Project not found');
+        const userId = await requireUserAuthorization(request, 'project:restore', {
+          projectId: existing.id
+        });
+        if (existing.organizationId !== snapshot.project.organizationId)
+          throw new CollaborationError('FORBIDDEN', 'Import project identity is invalid');
+        const expectedRevisionId = request.headers.get('x-selene-expected-revision-id');
+        if (
+          expectedRevisionId === null ||
+          expectedRevisionId.length === 0 ||
+          expectedRevisionId.length > collaborationBudgets.maxText
+        )
+          throw new CollaborationError('INVALID', 'Import requires the current revision');
         const result = await idempotent(
           options.repository,
-          `import:${userId}:${snapshot.project.id}`,
+          JSON.stringify(['import', userId, snapshot.project.id, expectedRevisionId]),
           request.headers.get('idempotency-key') ?? undefined,
           async () => {
-            await repository<void>(request, 'replaceProject', [
-              snapshot,
-              {
-                ...(request.headers.get('x-selene-expected-revision-id') === null
-                  ? {}
-                  : {
-                      expectedLatestRevisionId: request.headers.get(
-                        'x-selene-expected-revision-id'
-                      )!
-                    }),
-                context: contextFor(request)
-              }
+            const current = await repository<Revision | undefined>(request, 'getLatestRevision', [
+              snapshot.project.id
             ]);
+            if (current?.id !== expectedRevisionId)
+              throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+            try {
+              await repository<void>(request, 'replaceProject', [
+                snapshot,
+                { expectedLatestRevisionId: expectedRevisionId, context: contextFor(request) }
+              ]);
+            } catch (error) {
+              if (!isOwnedServiceUnavailableError(error)) throw error;
+              // A concurrent CAS loss is proven by persisted state, never by
+              // inspecting an arbitrary adapter exception or its message.
+              const latest = await repository<Revision | undefined>(request, 'getLatestRevision', [
+                snapshot.project.id
+              ]);
+              if (latest?.id !== expectedRevisionId)
+                throw new CollaborationError('CONFLICT', 'Project revision is no longer current');
+              throw error;
+            }
             await emit(
               request,
               snapshot.project.id,

@@ -108,6 +108,10 @@ export interface ArtifactDirectManipulationProps {
     readonly nodeId: string;
     readonly revisionId: string;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onDuplicateSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
   readonly onResizeSelectedElement: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -539,6 +543,7 @@ export function ArtboardPreview({
   selectedElement,
   onSelectedElementContextAction,
   onRemoveSelectedElement,
+  onDuplicateSelectedElement,
   onCreateArtifactThread,
   onClearElementSelection,
   onBeginSelectedElementTextEdit,
@@ -1965,6 +1970,32 @@ export function ArtboardPreview({
                           }}
                         >
                           {textEditSession ? 'Close text' : 'Edit text'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy ||
+                            layoutBusy !== undefined ||
+                            resizeBusy !== undefined ||
+                            moveBusy ||
+                            structureBusy
+                          }
+                          onClick={async () => {
+                            if (!selectedElement) return;
+                            setStructureBusy(true);
+                            setResizeStatus('Duplicating element…');
+                            try {
+                              const outcome = await onDuplicateSelectedElement({
+                                nodeId: selectedElement.nodeId,
+                                revisionId: selectedElement.revisionId
+                              });
+                              setResizeStatus(outcome.message);
+                            } finally {
+                              setStructureBusy(false);
+                            }
+                          }}
+                        >
+                          Duplicate
                         </button>
                         <button
                           type="button"

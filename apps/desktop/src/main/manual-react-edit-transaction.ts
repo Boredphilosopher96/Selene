@@ -371,7 +371,9 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
                       ? 'Manual semantic reparent'
                       : proposal.commands[0]?.kind === 'remove-node'
                         ? 'Remove React element'
-                        : 'Manual content edit'
+                        : proposal.commands[0]?.kind === 'duplicate-node'
+                          ? 'Duplicate React element'
+                          : 'Manual content edit'
       }),
       dependencies: Object.freeze(
         prepared.patch.dependency === undefined ||
@@ -380,13 +382,16 @@ export class CompilerBoundManualReactEditTransactionPort implements ManualReactE
           : [...context.workspace.dependencies, prepared.patch.dependency].sort()
       ),
       nodes: Object.freeze(
-        prepared.patch.addedNode === undefined
+        prepared.patch.addedNodes === undefined
           ? context.workspace.nodes.filter(
               (node) => !prepared.patch.removedNodeIds?.includes(node.nodeId)
             )
-          : [...context.workspace.nodes, prepared.patch.addedNode].sort((left, right) =>
-              left.nodeId.localeCompare(right.nodeId)
-            )
+          : [
+              ...context.workspace.nodes.filter(
+                (node) => !prepared.patch.removedNodeIds?.includes(node.nodeId)
+              ),
+              ...prepared.patch.addedNodes
+            ].sort((left, right) => left.nodeId.localeCompare(right.nodeId))
       ),
       files: Object.freeze(
         context.workspace.files.map((file) =>

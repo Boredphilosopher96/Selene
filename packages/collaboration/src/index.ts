@@ -646,7 +646,14 @@ export interface SignedShareLink {
 
 export type DesignBaselineIntent = 'review' | 'handoff';
 export type SemanticDesignChangeKind =
-  'source' | 'design-system' | 'token' | 'template' | 'dependency' | 'visual';
+  | 'source'
+  | 'design-system'
+  | 'token'
+  | 'template'
+  | 'dependency'
+  | 'visual'
+  | 'flow'
+  | 'direction';
 
 /** Mirrors the generated-design handoff model without coupling this package to core. */
 export interface DesignChangeScope {
@@ -1495,7 +1502,9 @@ function isSemanticDesignChangeKind(value: unknown): value is SemanticDesignChan
     value === 'token' ||
     value === 'template' ||
     value === 'dependency' ||
-    value === 'visual'
+    value === 'visual' ||
+    value === 'flow' ||
+    value === 'direction'
   );
 }
 
@@ -1517,7 +1526,16 @@ function validateSemanticDesignChange(change: SemanticDesignChange, projectId: s
   requireText(change.reason, 'designReviewState.change.reason');
   timestamp(change.occurredAt, 'designReviewState.change.occurredAt');
   if (
-    !['source', 'design-system', 'token', 'template', 'dependency', 'visual'].includes(change.kind)
+    ![
+      'source',
+      'design-system',
+      'token',
+      'template',
+      'dependency',
+      'visual',
+      'flow',
+      'direction'
+    ].includes(change.kind)
   )
     throw new CollaborationError('INVALID', 'Design review change has an invalid kind');
   requireText(change.beforeRevision.id, 'designReviewState.change.beforeRevision.id');

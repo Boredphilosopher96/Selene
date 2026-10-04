@@ -114,6 +114,74 @@
   color: #9f2d2d;
 }
 
+.canvas-workspace__toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.canvas-workspace__connection-editor {
+  z-index: 10020;
+  width: min(272px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #cbd3df;
+  border-radius: 9px;
+  color: #334057;
+  background: #f8f9fc;
+  box-shadow: 0 8px 28px #29364c33;
+  font-size: 11px;
+}
+
+.canvas-workspace__connection-editor form,
+.canvas-workspace__connection-editor label {
+  display: grid;
+  gap: 5px;
+}
+
+.canvas-workspace__connection-editor form {
+  gap: 9px;
+}
+
+.canvas-workspace__connection-editor :is(header, footer) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.canvas-workspace__connection-editor :is(button, select) {
+  min-width: 0;
+  min-height: 30px;
+  padding: 5px 7px;
+  border: 1px solid #b7c2d2;
+  border-radius: 5px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+}
+
+.canvas-workspace__connection-editor p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.canvas-workspace__connection-editor [role='alert'] {
+  color: #9f2d2d;
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__connection-editor {
+  border-color: var(--cockpit-line);
+  color: var(--cockpit-ink);
+  background: #182235;
+}
+
+.designer-workspace[data-theme='dark'] .canvas-workspace__connection-editor :is(button, select) {
+  border-color: #46546d;
+  background: #243149;
+}
+
 .designer-workspace[data-theme='dark'] .canvas-workspace {
   border-color: var(--cockpit-line);
   background: var(--cockpit-canvas);

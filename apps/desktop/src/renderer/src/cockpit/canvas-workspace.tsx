@@ -21,6 +21,7 @@ import {
 } from '@xyflow/react';
 import {
   removePrototypeTransition,
+  serializeCanonicalData,
   upsertPrototypeTransition,
   type PrototypeGraph,
   type PrototypeNode,
@@ -50,11 +51,25 @@ import {
 import {
   applyCanvasPreviewGesture,
   canvasShortcutAction,
+  canvasConnectionSelectionChanged,
   catalogEntryCanDrag,
   catalogInsertAvailability,
   projectGraphEdges,
+  type CanvasConnectionSelectionObservation,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
+import {
+  CanvasConnectionEditError,
+  createCanvasGraphHistory,
+  editCanvasGraphConnection,
+  planCanvasGraphHistory,
+  persistCanvasGraphHistory,
+  reconcileCanvasGraphHistory,
+  reconnectCanvasGraphConnection,
+  sameCanvasGraph,
+  type CanvasConnectionDraft,
+  type CanvasGraphHistoryChange
+} from './canvas-graph-history';
 import { ComponentCatalogExplorer } from './component-catalog-explorer';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
 import { ArtifactThreadCard, type FigmaCommentThreadProps } from './artboard-preview';
@@ -67,6 +82,7 @@ import type {
 } from '../../../shared/designer-api';
 import type { DesignSystemComponentPropertyValue } from '../../../shared/designer-api';
 import './canvas-workspace.css';
+import { StudioIcon } from './studio-icon';
 
 export type CanvasWorkspaceMode = 'design' | 'present';
 
@@ -134,6 +150,8 @@ interface CanvasWorkspaceProps {
   readonly saveStatus: string;
   /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
   readonly viewportLayoutKey: string;
+  /** Parent-owned dismissal is local only; it must not re-enter host selection clearing. */
+  readonly selectionClearEpoch: number;
   readonly activeNodeId?: string;
   readonly catalogManifest: DesignerSnapshot['componentCatalog']['manifest'];
   readonly catalogEntries: DesignerSnapshot['componentCatalog']['entries'];
@@ -805,6 +823,7 @@ export function CanvasWorkspace({
   readOnly,
   saveStatus,
   viewportLayoutKey,
+  selectionClearEpoch,
   activeNodeId,
   catalogManifest,
   catalogEntries,
@@ -833,7 +852,22 @@ export function CanvasWorkspace({
   inspectorTriggerRef
 }: CanvasWorkspaceProps) {
   const projectFence = `${authoritativeGraph.project.projectId}:${authoritativeGraph.id}`;
+  const currentProjectFence = useRef(projectFence);
+  currentProjectFence.current = projectFence;
   const [graph, setGraph] = useState(authoritativeGraph);
+  const [graphHistory, setGraphHistory] = useState(() =>
+    createCanvasGraphHistory(authoritativeGraph, graphRevision)
+  );
+  const [graphPending, setGraphPending] = useState(false);
+  const [connectionEditorOpen, setConnectionEditorOpen] = useState(false);
+  const connectionEditorTrigger = useRef<HTMLButtonElement | null>(null);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string>();
+  const [connectionDraft, setConnectionDraft] = useState<CanvasConnectionDraft>({
+    sourceNodeId: '',
+    portId: '',
+    kind: 'navigate',
+    targetNodeId: ''
+  });
   const latestGraph = useRef(authoritativeGraph);
   const latestRevision = useRef(graphRevision);
   const saveGraph = useRef(onGraphChange);
@@ -843,6 +877,7 @@ export function CanvasWorkspace({
     fence: projectFence,
     revision: graphRevision,
     graph: authoritativeGraph,
+    history: createCanvasGraphHistory(authoritativeGraph, graphRevision),
     pending: 0,
     tail: Promise.resolve()
   });
@@ -856,18 +891,51 @@ export function CanvasWorkspace({
         fence: projectFence,
         revision: graphRevision,
         graph: authoritativeGraph,
+        history: createCanvasGraphHistory(authoritativeGraph, graphRevision),
         pending: 0,
         tail: Promise.resolve()
       };
       setGraph(authoritativeGraph);
+      setGraphHistory(lane.current.history);
+      setGraphPending(false);
+      setSelectedConnectionId(undefined);
+      setConnectionEditorOpen(false);
       setCanvasError(undefined);
       return;
     }
     if (lane.current.pending > 0 || graphRevision < lane.current.revision) return;
     lane.current.graph = authoritativeGraph;
     lane.current.revision = graphRevision;
+    lane.current.history = reconcileCanvasGraphHistory(
+      lane.current.history,
+      authoritativeGraph,
+      graphRevision
+    );
+    setGraphHistory(lane.current.history);
     setGraph(authoritativeGraph);
   }, [authoritativeGraph, graphRevision, projectFence]);
+  useEffect(() => {
+    if (readOnly || mode !== 'design') setConnectionEditorOpen(false);
+  }, [readOnly, mode]);
+  const selectedConnection = graph.transitions.find((item) => item.id === selectedConnectionId);
+  useEffect(() => {
+    if (selectedConnectionId !== undefined && selectedConnection === undefined) {
+      setSelectedConnectionId(undefined);
+      setConnectionEditorOpen(false);
+      return;
+    }
+    const source = selectedConnection
+      ? graph.nodes.find((node) => node.id === selectedConnection.from.nodeId)
+      : graph.nodes.find((node) => node.ports.length > 0);
+    setConnectionDraft({
+      ...(selectedConnection ? { transitionId: selectedConnection.id } : {}),
+      sourceNodeId: source?.id ?? '',
+      portId: selectedConnection?.from.portId ?? source?.ports[0]?.id ?? '',
+      kind: selectedConnection?.kind ?? 'navigate',
+      targetNodeId:
+        selectedConnection && 'to' in selectedConnection ? selectedConnection.to.nodeId : ''
+    });
+  }, [graph.nodes, selectedConnection, selectedConnectionId]);
   const requestedActiveNode = graph.nodes.find((node) => node.id === activeNodeId);
   const activeId =
     requestedActiveNode?.kind === 'screen' || requestedActiveNode?.kind === 'page'
@@ -1326,8 +1394,11 @@ export function CanvasWorkspace({
               transition.from.nodeId === node.id &&
               (transition.kind === 'back' || transition.kind === 'reset-flow')
           );
-          const selectCommand = (transition: PrototypeTransition) =>
+          const selectCommand = (transition: PrototypeTransition) => {
             reportConnectionSelection.current(connectionSelection(graph, transition));
+            setSelectedConnectionId(transition.id);
+            if (!readOnly) setConnectionEditorOpen(true);
+          };
           const parent =
             node.kind === 'state'
               ? graph.nodes.find((candidate) => candidate.id === node.parentId)
@@ -1637,38 +1708,138 @@ export function CanvasWorkspace({
     [graph.nodes, graph.transitions, mode]
   );
   const [edges, setEdges] = useState<Edge[]>(graphEdges);
-  useEffect(() => setEdges(graphEdges), [graphEdges]);
+  const edgeProjectFence = useRef(projectFence);
+  useEffect(() => {
+    const currentFence = edgeProjectFence.current;
+    edgeProjectFence.current = projectFence;
+    // A host refresh may arrive after a newer local wire selection. Reproject
+    // topology without losing that selection, but never carry it into another
+    // project/graph whose edge IDs happen to overlap.
+    setEdges((current) =>
+      projectGraphEdges(graphEdges, current, [], { currentFence, graphFence: projectFence })
+    );
+  }, [graphEdges, projectFence]);
 
-  const enqueueGraphMutation = (mutation: (current: PrototypeGraph) => PrototypeGraph) => {
+  const observedConnectionSelection = useRef<CanvasConnectionSelectionObservation | undefined>(
+    undefined
+  );
+  const observedSelectionClearEpoch = useRef(selectionClearEpoch);
+  useEffect(() => {
+    if (observedSelectionClearEpoch.current === selectionClearEpoch) return;
+    observedSelectionClearEpoch.current = selectionClearEpoch;
+    observedConnectionSelection.current = undefined;
+    setSelectedNodeId('');
+    setNodes((current) => current.map((node) => ({ ...node, selected: false })));
+    setEdges((current) => current.map((edge) => ({ ...edge, selected: false })));
+    setSelectedConnectionId(undefined);
+    setConnectionEditorOpen(false);
+    // The parent already cleared inspect context. Do not notify it or the host
+    // again: the capture-phase Escape owner intentionally consumed the key.
+  }, [selectionClearEpoch]);
+  useEffect(() => {
+    const selectedEdgeId = edges.find((edge) => edge.selected)?.id;
+    const transition = graph.transitions.find((item) => item.id === selectedEdgeId);
+    if (
+      selectedEdgeId === undefined ||
+      transition === undefined ||
+      `${graph.project.projectId}:${graph.id}` !== projectFence
+    ) {
+      observedConnectionSelection.current = undefined;
+      return;
+    }
+    const selection = connectionSelection(graph, transition);
+    const next = {
+      projectFence,
+      selectedEdgeId,
+      signature: serializeCanonicalData(selection)
+    };
+    const previous = observedConnectionSelection.current;
+    observedConnectionSelection.current = next;
+    if (canvasConnectionSelectionChanged(previous, next))
+      reportConnectionSelection.current(selection);
+    // SelectionListener compares IDs, so reconnect/undo can retain selection
+    // without emitting a new callback. Refresh only changed inspect semantics;
+    // reportSelectedEdge would also reopen a deliberately closed editor.
+  }, [edges, graph, projectFence]);
+
+  const graphEditingAllowed = useRef(false);
+  graphEditingAllowed.current = !readOnly && mode === 'design' && surface === 'canvas';
+  const enqueueGraphOperation = (
+    change:
+      | { readonly kind: 'commit'; readonly mutate: (current: PrototypeGraph) => PrototypeGraph }
+      | { readonly kind: 'undo' | 'redo' }
+  ) => {
+    if (!graphEditingAllowed.current) return;
     const currentLane = lane.current;
     currentLane.pending += 1;
+    setGraphPending(true);
     const operation = currentLane.tail
       .catch(() => undefined)
       .then(async () => {
-        if (lane.current !== currentLane) return;
+        if (
+          lane.current !== currentLane ||
+          currentProjectFence.current !== currentLane.fence ||
+          !graphEditingAllowed.current
+        )
+          return;
+        const reconciled = reconcileCanvasGraphHistory(
+          currentLane.history,
+          latestGraph.current,
+          latestRevision.current
+        );
+        if (reconciled !== currentLane.history) {
+          currentLane.history = reconciled;
+          currentLane.graph = reconciled.graph;
+          currentLane.revision = reconciled.revision;
+          setGraphHistory(reconciled);
+          setGraph(reconciled.graph);
+        }
         const base = currentLane.graph;
         try {
-          const next = mutation(base);
+          const historyChange: CanvasGraphHistoryChange =
+            change.kind === 'commit' ? { kind: 'commit', graph: change.mutate(base) } : change;
+          const planned = planCanvasGraphHistory(currentLane.history, historyChange);
+          if (planned === undefined) return;
+          const next = planned.graph;
           currentLane.graph = next;
           setGraph(next);
           setCanvasError(undefined);
-          const saved = await saveGraph.current(next);
+          const savedHistory = await persistCanvasGraphHistory(planned, saveGraph.current);
+          const saved = { graph: savedHistory.graph, revision: savedHistory.revision };
           if (
             lane.current !== currentLane ||
+            currentProjectFence.current !== currentLane.fence ||
             `${saved.graph.project.projectId}:${saved.graph.id}` !== currentLane.fence
           )
             return;
           currentLane.graph = saved.graph;
           currentLane.revision = saved.revision;
+          currentLane.history = savedHistory;
+          setGraphHistory(currentLane.history);
           setGraph(saved.graph);
         } catch (error) {
-          if (lane.current !== currentLane) return;
+          if (lane.current !== currentLane || currentProjectFence.current !== currentLane.fence)
+            return;
           const rollback =
-            latestRevision.current > currentLane.revision ? latestGraph.current : base;
+            latestRevision.current > currentLane.revision ||
+            (latestRevision.current === currentLane.revision &&
+              !sameCanvasGraph(latestGraph.current, base))
+              ? latestGraph.current
+              : base;
           currentLane.graph = rollback;
           currentLane.revision = Math.max(currentLane.revision, latestRevision.current);
+          currentLane.history = reconcileCanvasGraphHistory(
+            currentLane.history,
+            rollback,
+            currentLane.revision
+          );
+          setGraphHistory(currentLane.history);
           setGraph(rollback);
-          setCanvasError(presentDesignerError(error, 'canvas'));
+          setCanvasError(
+            error instanceof CanvasConnectionEditError
+              ? error.message
+              : presentDesignerError(error, 'canvas')
+          );
         }
       })
       .finally(() => {
@@ -1676,17 +1847,33 @@ export function CanvasWorkspace({
         if (
           lane.current === currentLane &&
           currentLane.pending === 0 &&
-          latestRevision.current > currentLane.revision
+          (latestRevision.current > currentLane.revision ||
+            (latestRevision.current === currentLane.revision &&
+              !sameCanvasGraph(latestGraph.current, currentLane.graph)))
         ) {
           currentLane.graph = latestGraph.current;
           currentLane.revision = latestRevision.current;
+          currentLane.history = reconcileCanvasGraphHistory(
+            currentLane.history,
+            latestGraph.current,
+            latestRevision.current
+          );
+          setGraphHistory(currentLane.history);
           setGraph(latestGraph.current);
         }
+        if (lane.current === currentLane && currentProjectFence.current === currentLane.fence)
+          setGraphPending(currentLane.pending > 0);
       });
     currentLane.tail = operation.then(
       () => undefined,
       () => undefined
     );
+  };
+  const enqueueGraphMutation = (mutate: (current: PrototypeGraph) => PrototypeGraph) =>
+    enqueueGraphOperation({ kind: 'commit', mutate });
+  const applyFlowHistory = useRef<(direction: 'undo' | 'redo') => void>(() => undefined);
+  applyFlowHistory.current = (kind) => {
+    if (lane.current.pending === 0) enqueueGraphOperation({ kind });
   };
   const updateNodes = (changes: NodeChange<WorkspaceNode>[]) => {
     const safeChanges = changes.filter((change) => change.type !== 'remove');
@@ -1730,7 +1917,28 @@ export function CanvasWorkspace({
     reportConnectionSelection.current(
       transition ? connectionSelection(currentGraph, transition) : undefined
     );
+    setSelectedConnectionId(transition?.id);
+    setConnectionEditorOpen(transition !== undefined && graphEditingAllowed.current);
   }, []);
+  const reconnect = (edge: Edge, connection: Connection) => {
+    enqueueGraphMutation((current) => {
+      const result = reconnectCanvasGraphConnection(current, edge.id, connection);
+      if (result.kind === 'unavailable') throw new CanvasConnectionEditError(result.message);
+      return result.graph;
+    });
+  };
+  const applyConnectionDraft = () => {
+    const draft = connectionDraft;
+    enqueueGraphMutation((current) => {
+      const result = editCanvasGraphConnection(
+        current,
+        draft,
+        stableConnectionId(draft.sourceNodeId, draft.portId, draft.targetNodeId || draft.kind)
+      );
+      if (result.kind === 'unavailable') throw new CanvasConnectionEditError(result.message);
+      return result.graph;
+    });
+  };
   const selectCanvasItems = useCallback(
     (selection: { readonly edges: readonly Edge[] }) => reportSelectedEdge(selection.edges[0]?.id),
     [reportSelectedEdge]
@@ -1750,6 +1958,8 @@ export function CanvasWorkspace({
   };
   const clearCanvasSelection = useCallback(() => {
     setSelectedNodeId('');
+    setEdges((current) => current.map((edge) => ({ ...edge, selected: false })));
+    setConnectionEditorOpen(false);
     reportSelectedEdge();
     onNodeSelectionChange(undefined);
     onClearSelection();
@@ -1795,6 +2005,17 @@ export function CanvasWorkspace({
   const applyShortcut = useCallback(
     (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || isTextEditingTarget(event.target)) return;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        if (
+          event.target instanceof Element &&
+          workspace.current?.contains(event.target) &&
+          event.target.closest('.react-flow__node, .react-flow__edge, [data-graph-history]')
+        ) {
+          event.preventDefault();
+          if (!event.repeat) applyFlowHistory.current(event.shiftKey ? 'redo' : 'undo');
+        }
+        return;
+      }
       const action = canvasShortcutAction({
         key: event.key,
         shiftKey: event.shiftKey,
@@ -1866,9 +2087,9 @@ export function CanvasWorkspace({
     };
   }, [applyShortcut]);
   useEffect(() => {
-    if (mode !== 'present') return;
+    if (mode !== 'present' || readOnly) return;
     requestAnimationFrame(() => presentExit.current?.focus());
-  }, [mode]);
+  }, [mode, readOnly]);
   useEffect(() => {
     if (mode !== 'present') return;
     const exitFromTrustedPreview = () => {
@@ -1910,10 +2131,17 @@ export function CanvasWorkspace({
         <CanvasPreviewContext.Provider value={preview}>
           <div className="canvas-presentation__artifact">{preview}</div>
         </CanvasPreviewContext.Provider>
+        <output className="canvas-presentation__status" aria-live="polite">
+          {safeDesignerNotice(
+            saveStatus,
+            'Presentation status is unavailable. Try Exit to return to the editor.'
+          )}
+        </output>
         <button
           className="canvas-presentation__exit"
           ref={presentExit}
           type="button"
+          disabled={readOnly}
           onClick={(event) => void onModeChange('design', event.currentTarget)}
         >
           Exit
@@ -1943,88 +2171,143 @@ export function CanvasWorkspace({
       }}
     >
       <header className="canvas-workspace__toolbar">
-        <div role="toolbar" aria-label="Canvas tools">
-          <button
-            type="button"
-            aria-pressed={surface === 'canvas'}
-            onClick={() => setSurface('canvas')}
+        <div className="canvas-workspace__tools" role="toolbar" aria-label="Canvas tools">
+          <div
+            className="canvas-workspace__tool-group canvas-workspace__modes"
+            role="group"
+            aria-label="Workspace modes"
           >
-            Design
-          </button>
-          <button
-            type="button"
-            aria-pressed={surface === 'components'}
-            onClick={() => {
-              clearCanvasSelection();
-              clearCatalogDrag();
-              setSurface('components');
-            }}
-          >
-            Components
-          </button>
-          <button
-            type="button"
-            disabled={readOnly}
-            onClick={(event) => {
-              setSurface('canvas');
-              void onModeChange('present', event.currentTarget);
-            }}
-          >
-            Present
-          </button>
+            <button
+              type="button"
+              aria-pressed={surface === 'canvas'}
+              onClick={() => setSurface('canvas')}
+            >
+              <StudioIcon name="canvas" /> Design
+            </button>
+            <button
+              type="button"
+              aria-pressed={surface === 'components'}
+              onClick={() => {
+                clearCanvasSelection();
+                clearCatalogDrag();
+                setSurface('components');
+              }}
+            >
+              <StudioIcon name="components" /> Components
+            </button>
+            <button
+              type="button"
+              disabled={readOnly}
+              onClick={(event) => {
+                setSurface('canvas');
+                void onModeChange('present', event.currentTarget);
+              }}
+            >
+              <StudioIcon name="play" /> Present
+            </button>
+          </div>
           {surface === 'canvas' ? (
             <>
-              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
-              <button
-                type="button"
-                aria-pressed={handTool}
-                aria-keyshortcuts="H"
-                onClick={() => {
-                  clearCanvasSelection();
-                  setHandTool((current) => !current);
-                }}
+              {!readOnly ? (
+                <div
+                  className="canvas-workspace__tool-group"
+                  role="group"
+                  aria-label="Flow history and connections"
+                >
+                  <button
+                    type="button"
+                    data-graph-history
+                    aria-label="Undo flow change"
+                    aria-keyshortcuts="Meta+Z Control+Z"
+                    disabled={graphPending || graphHistory.past.length === 0}
+                    onClick={() => applyFlowHistory.current('undo')}
+                  >
+                    <StudioIcon name="undo" /> Undo
+                  </button>
+                  <button
+                    type="button"
+                    data-graph-history
+                    aria-label="Redo flow change"
+                    aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z"
+                    disabled={graphPending || graphHistory.future.length === 0}
+                    onClick={() => applyFlowHistory.current('redo')}
+                  >
+                    <StudioIcon name="redo" /> Redo
+                  </button>
+                  <button
+                    type="button"
+                    ref={connectionEditorTrigger}
+                    aria-expanded={connectionEditorOpen}
+                    aria-controls="canvas-connection-editor"
+                    onClick={() => {
+                      if (!connectionEditorOpen && selectedConnectionId === undefined)
+                        setSelectedConnectionId(graph.transitions[0]?.id);
+                      setConnectionEditorOpen((open) => !open);
+                    }}
+                  >
+                    <StudioIcon name="connections" /> Connections
+                  </button>
+                </div>
+              ) : null}
+              <div
+                className="canvas-workspace__tool-group"
+                role="group"
+                aria-label="Canvas navigation"
               >
-                Hand <kbd>H</kbd>
-              </button>
-              <button
-                type="button"
-                aria-keyshortcuts="Shift+1"
-                data-canvas-command="fit-all"
-                onClick={() => {
-                  clearCanvasSelection();
-                  void fitAll();
-                }}
-              >
-                Fit all <kbd>⇧1</kbd>
-              </button>
-              <button type="button" aria-keyshortcuts="Shift+0" onClick={() => void fitArtboards()}>
-                Reset <kbd>⇧0</kbd>
-              </button>
-              <button
-                type="button"
-                aria-label="Fit selection"
-                aria-keyshortcuts="Shift+2"
-                data-canvas-command="fit-selection"
-                title="Fit selection (Shift+2)"
-                onClick={() => void fitSelection()}
-              >
-                Fit <kbd>⇧2</kbd>
-              </button>
-              <button
-                className="canvas-workspace__selection-tool"
-                type="button"
-                aria-label="Selection"
-                aria-keyshortcuts="V"
-                data-canvas-command="selection-tool"
-                title="Selection tool (V)"
-                onClick={activateSelectionTool}
-              >
-                <svg aria-hidden="true" viewBox="0 0 16 16">
-                  <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
-                </svg>
-                <kbd>V</kbd>
-              </button>
-              <span className="canvas-workspace__toolbar-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  aria-pressed={handTool}
+                  aria-keyshortcuts="H"
+                  onClick={() => {
+                    clearCanvasSelection();
+                    setHandTool((current) => !current);
+                  }}
+                >
+                  <StudioIcon name="hand" /> Hand <kbd>H</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-keyshortcuts="Shift+1"
+                  data-canvas-command="fit-all"
+                  onClick={() => {
+                    clearCanvasSelection();
+                    void fitAll();
+                  }}
+                >
+                  <StudioIcon name="fit" /> Fit all <kbd>⇧1</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-keyshortcuts="Shift+0"
+                  onClick={() => void fitArtboards()}
+                >
+                  Reset <kbd>⇧0</kbd>
+                </button>
+                <button
+                  type="button"
+                  aria-label="Fit selection"
+                  aria-keyshortcuts="Shift+2"
+                  data-canvas-command="fit-selection"
+                  title="Fit selection (Shift+2)"
+                  onClick={() => void fitSelection()}
+                >
+                  Fit <kbd>⇧2</kbd>
+                </button>
+                <button
+                  className="canvas-workspace__selection-tool"
+                  type="button"
+                  aria-label="Selection"
+                  aria-keyshortcuts="V"
+                  data-canvas-command="selection-tool"
+                  title="Selection tool (V)"
+                  onClick={activateSelectionTool}
+                >
+                  <svg aria-hidden="true" viewBox="0 0 16 16">
+                    <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
+                  </svg>
+                  <kbd>V</kbd>
+                </button>
+              </div>
               <button
                 className="canvas-workspace__ask-ai"
                 type="button"
@@ -2034,7 +2317,7 @@ export function CanvasWorkspace({
                   onRequestAiTarget(event.currentTarget);
                 }}
               >
-                @ Ask AI
+                <StudioIcon name="sparkles" /> @ Ask AI
               </button>
             </>
           ) : null}
@@ -2056,7 +2339,7 @@ export function CanvasWorkspace({
           <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
             {onOpenAi ? (
               <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
-                AI
+                <StudioIcon name="sparkles" /> AI
               </button>
             ) : null}
             {onOpenInspector ? (
@@ -2066,7 +2349,7 @@ export function CanvasWorkspace({
                 aria-label="Open Dev Inspect"
                 onClick={onOpenInspector}
               >
-                Inspect
+                <StudioIcon name="inspect" /> Inspect
               </button>
             ) : null}
           </div>
@@ -2139,6 +2422,7 @@ export function CanvasWorkspace({
           onEdgesChange={updateEdges}
           onNodeDragStop={saveNodePosition}
           onConnect={connect}
+          onReconnect={reconnect}
           onEdgesDelete={removeEdges}
           onSelectionChange={selectCanvasItems}
           onNodeClick={selectNode}
@@ -2151,7 +2435,7 @@ export function CanvasWorkspace({
           nodesDraggable={!readOnly && mode === 'design' && !handTool && !spacePressed}
           nodesConnectable={!readOnly && mode === 'design'}
           edgesFocusable={mode === 'design'}
-          edgesReconnectable={false}
+          edgesReconnectable={!readOnly && mode === 'design' && !graphPending}
           deleteKeyCode={mode === 'design' && !readOnly ? ['Backspace', 'Delete'] : null}
           panOnScroll
           panOnDrag={handTool || spacePressed ? [0, 1, 2] : [1, 2]}
@@ -2168,6 +2452,208 @@ export function CanvasWorkspace({
           attributionPosition="bottom-right"
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#aab3c4" />
+          {connectionEditorOpen && !readOnly && surface === 'canvas' ? (
+            <Panel
+              position="bottom-right"
+              className="canvas-workspace__connection-editor"
+              data-canvas-overlay-interaction
+            >
+              <form
+                id="canvas-connection-editor"
+                aria-label="Prototype connection editor"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  applyConnectionDraft();
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setConnectionEditorOpen(false);
+                  connectionEditorTrigger.current?.focus();
+                }}
+              >
+                <header>
+                  <strong>Connection editor</strong>
+                  <button
+                    type="button"
+                    aria-label="Close connection editor"
+                    onClick={() => {
+                      setConnectionEditorOpen(false);
+                      connectionEditorTrigger.current?.focus();
+                    }}
+                  >
+                    Close
+                  </button>
+                </header>
+                <label>
+                  Connection
+                  <select
+                    aria-label="Connection"
+                    value={selectedConnectionId ?? ''}
+                    disabled={graphPending}
+                    onChange={(event) =>
+                      setSelectedConnectionId(event.currentTarget.value || undefined)
+                    }
+                  >
+                    <option value="">New connection</option>
+                    {graph.transitions.map((transition) => {
+                      const selection = connectionSelection(graph, transition);
+                      return (
+                        <option key={transition.id} value={transition.id}>
+                          {selection.sourceLabel} · {selection.actionLabel}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+                <label>
+                  Source screen or state
+                  <select
+                    aria-label="Connection source"
+                    value={connectionDraft.sourceNodeId}
+                    disabled={graphPending}
+                    onChange={(event) => {
+                      const source = graph.nodes.find(
+                        (node) => node.id === event.currentTarget.value
+                      );
+                      if (source)
+                        setConnectionDraft((draft) => ({
+                          ...draft,
+                          sourceNodeId: source.id,
+                          portId: source.ports[0]?.id ?? ''
+                        }));
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choose source
+                    </option>
+                    {graph.nodes
+                      .filter((node) => node.ports.length > 0)
+                      .map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.label}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  Source action
+                  <select
+                    aria-label="Connection action"
+                    value={connectionDraft.portId}
+                    disabled={graphPending}
+                    onChange={(event) => {
+                      const portId = event.currentTarget.value;
+                      setConnectionDraft((draft) => ({
+                        ...draft,
+                        portId
+                      }));
+                    }}
+                  >
+                    <option value="" disabled>
+                      Choose action
+                    </option>
+                    {(
+                      graph.nodes.find((node) => node.id === connectionDraft.sourceNodeId)?.ports ??
+                      []
+                    ).map((port) => (
+                      <option key={port.id} value={port.id}>
+                        {port.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Behavior
+                  <select
+                    aria-label="Connection behavior"
+                    value={connectionDraft.kind}
+                    disabled={graphPending}
+                    onChange={(event) => {
+                      const kind = (
+                        [
+                          'navigate',
+                          'set-state',
+                          'open-overlay',
+                          'close-overlay',
+                          'back',
+                          'reset-flow'
+                        ] as const
+                      ).find((candidate) => candidate === event.currentTarget.value);
+                      if (kind) setConnectionDraft((draft) => ({ ...draft, kind }));
+                    }}
+                  >
+                    <option value="navigate">Navigate</option>
+                    <option value="set-state">Show state</option>
+                    <option value="open-overlay">Open overlay</option>
+                    <option value="close-overlay">Close overlay</option>
+                    <option value="back">Back</option>
+                    <option value="reset-flow">Reset flow</option>
+                  </select>
+                </label>
+                {connectionDraft.kind !== 'back' && connectionDraft.kind !== 'reset-flow' ? (
+                  <label>
+                    Destination
+                    <select
+                      aria-label="Connection destination"
+                      value={connectionDraft.targetNodeId}
+                      disabled={graphPending}
+                      onChange={(event) => {
+                        const targetNodeId = event.currentTarget.value;
+                        setConnectionDraft((draft) => ({
+                          ...draft,
+                          targetNodeId
+                        }));
+                      }}
+                    >
+                      <option value="">Choose destination</option>
+                      {graph.nodes.map((node) => (
+                        <option key={node.id} value={node.id}>
+                          {node.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <p>
+                    {connectionDraft.kind === 'back'
+                      ? 'Uses the previous screen in runtime history.'
+                      : 'Returns to the scenario start.'}
+                  </p>
+                )}
+                <p>Uses the declared frame action. Element hotspot binding is unavailable.</p>
+                <p>Changing a connection may shorten the affected scenario paths.</p>
+                <footer>
+                  <button type="submit" disabled={graphPending}>
+                    Save connection
+                  </button>
+                  {selectedConnection ? (
+                    <button
+                      type="button"
+                      disabled={graphPending}
+                      onClick={() =>
+                        removeEdges([
+                          {
+                            id: selectedConnection.id,
+                            source: selectedConnection.from.nodeId,
+                            target: transitionTarget(selectedConnection)
+                          }
+                        ])
+                      }
+                    >
+                      Delete connection
+                    </button>
+                  ) : null}
+                </footer>
+                {canvasError ? (
+                  <p role="alert">
+                    {safeDesignerNotice(canvasError, 'Connection could not be saved. Try again.')}
+                  </p>
+                ) : null}
+              </form>
+            </Panel>
+          ) : null}
           {libraryOpen ? (
             <Panel className="canvas-workspace__library" position="top-left">
               <header className="canvas-workspace__library-header">

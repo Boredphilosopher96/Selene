@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { exactBunStoreEntry, exactDependencyVersion } from './bun-store';
-import { harnessIdentity, harnessPorts, harnessUrl } from '../../scripts/playwright-harness.mjs';
+import {
+  assertNativeElectronTestAllowed,
+  harnessIdentity,
+  harnessPorts,
+  harnessUrl
+} from '../../scripts/playwright-harness.mjs';
 
 const ports = harnessPorts();
 
@@ -64,6 +69,7 @@ async function installedAxeSource(): Promise<string> {
 }
 
 async function electronExecutable(): Promise<string> {
+  assertNativeElectronTestAllowed();
   const electronDirectory = await installedBunPackage(
     'electron',
     desktopPackageManifest,
@@ -833,6 +839,7 @@ test('the Storybook foundation uses forced-colors tokens without accessibility v
 });
 
 test('the built Electron desktop window has no WCAG A or AA violations', async () => {
+  assertNativeElectronTestAllowed();
   const userData = await mkdtemp(join(tmpdir(), `selene-${harnessIdentity()}-a11y-electron-`));
   const diagnostics: string[] = [];
   const application = await electron.launch({

@@ -1240,6 +1240,7 @@ function FixtureCockpit({
         };
       }),
     undoLatestManualDesignEdit: next,
+    redoLatestManualDesignEdit: next,
     addReviewThread: async (input) => {
       const selectionAnchor = consumeArtifactSelectionReceipt(
         input.selectionReceipt.receiptId,

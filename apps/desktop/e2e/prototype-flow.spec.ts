@@ -1,4 +1,11 @@
-import { _electron as electron, expect, test } from '@playwright/test';
+import {
+  _electron as electron,
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type TestInfo
+} from '@playwright/test';
 import { type ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -6,6 +13,10 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { inflateSync } from 'node:zlib';
+
+import { assertNativeElectronTestAllowed } from '../../../scripts/playwright-harness.mjs';
+
+test.beforeAll(() => assertNativeElectronTestAllowed());
 
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const harnessMain = fileURLToPath(new URL('./prototype-flow-harness-main.cjs', import.meta.url));
@@ -201,6 +212,7 @@ function desktopArgs(userData: string): string[] {
 }
 
 async function electronExecutable(): Promise<string> {
+  assertNativeElectronTestAllowed();
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
@@ -247,6 +259,269 @@ function captureStartupOutput(child: ChildProcess): () => string {
   return () => output || '(Electron emitted no startup output.)';
 }
 
+interface ArtboardDragEventEvidence {
+  readonly captureTarget: 'window' | 'artboard';
+  readonly type: string;
+  readonly target: string | null;
+  readonly isTrusted: boolean;
+  readonly ownedByHandle: boolean;
+  readonly button: number;
+  readonly buttons: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly defaultPrevented: boolean;
+}
+
+interface ArtboardDragSample {
+  readonly checkpoint: string;
+  readonly className: string;
+  readonly handleBounds: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
+  readonly style: string | null;
+  readonly transform: string;
+  readonly viewportTransform: string | null;
+  readonly mode: string | null | undefined;
+  readonly events: readonly ArtboardDragEventEvidence[];
+}
+
+/** One native gesture, with evidence that input reached the handle and moved the node. */
+async function dragArtboard(
+  page: Page,
+  artboard: Locator,
+  delta: { readonly x: number; readonly y: number },
+  testInfo: TestInfo,
+  expectedToMove = true
+): Promise<string> {
+  await expect(artboard).toBeVisible();
+  if (expectedToMove) await expect(artboard).toHaveClass(/\bdraggable\b/);
+  else await expect(artboard).not.toHaveClass(/\bdraggable\b/);
+  const handle = artboard.locator('.canvas-artboard__drag-handle, .canvas-artboard__label').first();
+  await expect(handle).toBeVisible();
+  let previousBounds: Awaited<ReturnType<typeof handle.boundingBox>>;
+  let stableSamples = 0;
+  await expect
+    .poll(
+      async () => {
+        // fitView queues measured nodes and advances its animation on paint
+        // frames. Wall-clock polls can repeatedly read unchanged geometry while
+        // those frames are stalled on a hosted native display.
+        const candidate = await handle.evaluate(async (element) => {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          const bounds = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(
+            bounds.x + bounds.width / 2,
+            bounds.y + bounds.height / 2
+          );
+          return {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height,
+            ownsCenter: hit !== null && (hit === element || element.contains(hit))
+          };
+        });
+        const settled =
+          previousBounds !== undefined &&
+          previousBounds !== null &&
+          Math.abs(candidate.x - previousBounds.x) < 0.25 &&
+          Math.abs(candidate.y - previousBounds.y) < 0.25 &&
+          Math.abs(candidate.width - previousBounds.width) < 0.25 &&
+          Math.abs(candidate.height - previousBounds.height) < 0.25;
+        previousBounds = candidate;
+        stableSamples = settled ? stableSamples + 1 : 0;
+        return stableSamples >= 3 && candidate.ownsCenter;
+      },
+      {
+        intervals: [80],
+        timeout: 5_000,
+        message: 'Artboard drag handle should settle and own its pointer hit after canvas framing.'
+      }
+    )
+    .toBe(true);
+  const bounds = await handle.boundingBox();
+  if (!bounds) throw new Error('Artboard drag handle has no physical bounds.');
+  let start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+  const hitOwnership = () =>
+    handle.evaluate((element, point) => {
+      const hit = document.elementFromPoint(point.x, point.y);
+      return {
+        hitClass: hit instanceof HTMLElement ? hit.className : null,
+        hitTag: hit?.tagName ?? null,
+        ownedByHandle: hit !== null && (hit === element || element.contains(hit)),
+        hovered: element.matches(':hover')
+      };
+    }, start);
+  const beforeHitOwnership = await hitOwnership();
+  expect(beforeHitOwnership.ownedByHandle, JSON.stringify(beforeHitOwnership)).toBe(true);
+  await artboard.evaluate((node) => {
+    const events: ArtboardDragEventEvidence[] = [];
+    const controller = new AbortController();
+    node.setAttribute('data-selene-drag-events', '[]');
+    const record = (event: Event) => {
+      const pointer = event as PointerEvent;
+      const target = event.target instanceof Element ? event.target : null;
+      const targetHandle = target?.closest(
+        '.canvas-artboard__drag-handle, .canvas-artboard__label'
+      );
+      events.push({
+        captureTarget: event.currentTarget === window ? 'window' : 'artboard',
+        type: event.type,
+        target: target instanceof HTMLElement ? `${target.tagName}.${target.className}` : null,
+        isTrusted: event.isTrusted,
+        ownedByHandle:
+          targetHandle !== undefined && targetHandle !== null && node.contains(targetHandle),
+        button: pointer.button,
+        buttons: pointer.buttons,
+        clientX: pointer.clientX,
+        clientY: pointer.clientY,
+        defaultPrevented: event.defaultPrevented
+      });
+      node.setAttribute('data-selene-drag-events', JSON.stringify(events));
+    };
+    // d3 captures held mousemove at window and can stop delivery to the node.
+    // Observe there before the gesture as well as on the artboard itself.
+    for (const type of [
+      'pointerdown',
+      'mousedown',
+      'pointermove',
+      'mousemove',
+      'pointerup',
+      'mouseup'
+    ])
+      window.addEventListener(type, record, { capture: true, signal: controller.signal });
+    for (const type of ['pointermove', 'mousemove', 'pointerup', 'mouseup'])
+      node.addEventListener(type, record, { capture: true, signal: controller.signal });
+    node.addEventListener('selene-e2e-drag-cleanup', () => controller.abort(), { once: true });
+  });
+  const samples: ArtboardDragSample[] = [];
+  const sample = async (checkpoint: string) => {
+    const result = await artboard.evaluate((node, name) => {
+      const sampledHandle = node.querySelector(
+        '.canvas-artboard__drag-handle, .canvas-artboard__label'
+      );
+      const sampledBounds = sampledHandle?.getBoundingClientRect();
+      return {
+        checkpoint: name,
+        className: node.getAttribute('class') ?? '',
+        handleBounds: sampledBounds
+          ? {
+              x: sampledBounds.x,
+              y: sampledBounds.y,
+              width: sampledBounds.width,
+              height: sampledBounds.height
+            }
+          : null,
+        style: node.getAttribute('style'),
+        transform: (node as HTMLElement).style.transform,
+        viewportTransform: node.closest('.react-flow__viewport')?.getAttribute('style') ?? null,
+        mode: node.closest('[aria-label="Design canvas"]')?.getAttribute('data-mode'),
+        events: JSON.parse(
+          node.getAttribute('data-selene-drag-events') ?? '[]'
+        ) as ArtboardDragEventEvidence[]
+      };
+    }, checkpoint);
+    samples.push(result);
+    return result;
+  };
+  const settlePaint = () =>
+    page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        })
+    );
+  let hoveredHitOwnership: Awaited<ReturnType<typeof hitOwnership>> | undefined;
+  let pointerHeld = false;
+  let evidence = '';
+  try {
+    const before = await sample('before pointer delivery');
+    // Native locator hover waits for painted stability and resolves the current
+    // handle, rather than delivering a pointer to an earlier viewport center.
+    await handle.hover({ timeout: 5_000 });
+    // The native iframe compositor workaround is activated by header hover.
+    // Geometry can already be stable before that hover state has been painted.
+    await settlePaint();
+    const hoverDelivery = await sample('native handle hover delivered');
+    const nativeHover = [...hoverDelivery.events]
+      .reverse()
+      .find(
+        (event) =>
+          event.captureTarget === 'window' &&
+          event.type === 'pointermove' &&
+          event.isTrusted &&
+          event.ownedByHandle &&
+          event.buttons === 0
+      );
+    if (!nativeHover)
+      throw new Error(
+        `Native hover must reach this artboard handle: ${JSON.stringify(hoverDelivery)}`
+      );
+    // Continue from the point that actually received native input, including
+    // any framing that completed during the locator's actionability wait.
+    start = { x: nativeHover.clientX, y: nativeHover.clientY };
+    hoveredHitOwnership = await hitOwnership();
+    expect(hoveredHitOwnership.ownedByHandle, JSON.stringify(hoveredHitOwnership)).toBe(true);
+    expect(hoveredHitOwnership.hovered, JSON.stringify(hoveredHitOwnership)).toBe(true);
+    await sample('handle hovered');
+    await page.mouse.down();
+    pointerHeld = true;
+    const held = await sample('pointer held');
+    if (expectedToMove) {
+      for (const type of ['pointerdown', 'mousedown']) {
+        expect(
+          held.events.some(
+            (event) =>
+              event.type === type &&
+              event.isTrusted &&
+              event.ownedByHandle &&
+              event.button === 0 &&
+              event.buttons === 1
+          ),
+          `${type} must reach this artboard handle: ${JSON.stringify(held)}`
+        ).toBe(true);
+      }
+    }
+    const moveAndSample = async (step: number) => {
+      await page.mouse.move(start.x + (delta.x * step) / 4, start.y + (delta.y * step) / 4);
+      await sample(`held move ${step}`);
+    };
+    await moveAndSample(1);
+    await moveAndSample(2);
+    await moveAndSample(3);
+    await moveAndSample(4);
+    await settlePaint();
+    const moved = await sample('held movement settled');
+    const heldMovement = moved.events.some(
+      (event) => event.type === 'mousemove' && event.isTrusted && event.buttons === 1
+    );
+    expect(heldMovement, JSON.stringify(moved)).toBe(true);
+    if (expectedToMove) {
+      expect(moved.className, JSON.stringify(moved)).toMatch(/\bdragging\b/);
+      expect(moved.transform, JSON.stringify(samples)).not.toBe(before.transform);
+    } else {
+      expect(moved.className, JSON.stringify(moved)).not.toMatch(/\bdragging\b/);
+      expect(moved.transform, JSON.stringify(samples)).toBe(before.transform);
+    }
+  } finally {
+    if (pointerHeld) await page.mouse.up();
+    await sample('pointer released');
+    evidence = JSON.stringify({ beforeHitOwnership, hoveredHitOwnership, samples }, null, 2);
+    await testInfo.attach(`canvas-drag-${await artboard.getAttribute('data-id')}.json`, {
+      body: evidence,
+      contentType: 'application/json'
+    });
+    // This event only removes test-owned diagnostic listeners.
+    await artboard.evaluate((node) => node.dispatchEvent(new Event('selene-e2e-drag-cleanup')));
+  }
+  // React Flow clears its transient drag class in its post-pointer-up frame.
+  await expect(artboard, evidence).not.toHaveClass(/\bdragging\b/);
+  return evidence;
+}
+
 test('renders one compiled React artboard with prototype wiring on the unified design canvas', async ({
   browserName: _browserName
 }, testInfo) => {
@@ -280,6 +555,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Design',
       'Components',
       'Present',
+      'Undo',
+      'Redo',
+      'Connections',
       'Hand H',
       'Fit all ⇧1',
       'Reset ⇧0',
@@ -457,152 +735,6 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
     await expect(canvas.getByLabel('Artboards')).toBeHidden();
 
-    const dragArtboard = async (
-      artboard: ReturnType<typeof canvas.locator>,
-      delta: { readonly x: number; readonly y: number },
-      expectedToMove = true
-    ) => {
-      await expect(artboard).toBeVisible();
-      await artboard.evaluate((node) => {
-        const events: unknown[] = [];
-        node.setAttribute('data-selene-drag-events', '[]');
-        const record = (event: Event) => {
-          const pointer = event as PointerEvent;
-          events.push({
-            captureTarget: event.currentTarget === window ? 'window' : 'artboard',
-            type: event.type,
-            target:
-              event.target instanceof HTMLElement
-                ? `${event.target.tagName}.${event.target.className}`
-                : null,
-            button: pointer.button,
-            buttons: pointer.buttons,
-            clientX: pointer.clientX,
-            clientY: pointer.clientY,
-            defaultPrevented: event.defaultPrevented
-          });
-          node.setAttribute('data-selene-drag-events', JSON.stringify(events));
-        };
-        for (const type of ['pointerdown', 'mousedown'])
-          window.addEventListener(type, record, { capture: true, once: true });
-        for (const type of ['pointermove', 'mousemove', 'pointerup', 'mouseup'])
-          node.addEventListener(type, record, { capture: true });
-      });
-      const handle = artboard
-        .locator('.canvas-artboard__drag-handle, .canvas-artboard__label')
-        .first();
-      let previousBounds:
-        | {
-            readonly x: number;
-            readonly y: number;
-            readonly width: number;
-            readonly height: number;
-          }
-        | undefined;
-      let stableSamples = 0;
-      await expect
-        .poll(
-          async () => {
-            const candidate = await handle.boundingBox();
-            if (!candidate) return false;
-            const settled =
-              previousBounds !== undefined &&
-              Math.abs(candidate.x - previousBounds.x) < 0.25 &&
-              Math.abs(candidate.y - previousBounds.y) < 0.25 &&
-              Math.abs(candidate.width - previousBounds.width) < 0.25 &&
-              Math.abs(candidate.height - previousBounds.height) < 0.25;
-            previousBounds = candidate;
-            stableSamples = settled ? stableSamples + 1 : 0;
-            return stableSamples >= 2;
-          },
-          {
-            intervals: [80, 80, 80, 80, 120],
-            message: 'Artboard drag handle should settle after canvas framing.'
-          }
-        )
-        .toBe(true);
-      await expect
-        .poll(
-          async () => {
-            const candidate = await handle.boundingBox();
-            if (!candidate) return false;
-            const point = {
-              x: candidate.x + candidate.width / 2,
-              y: candidate.y + candidate.height / 2
-            };
-            return handle.evaluate((element, center) => {
-              const hit = document.elementFromPoint(center.x, center.y);
-              return hit !== null && (hit === element || element.contains(hit));
-            }, point);
-          },
-          { message: 'Artboard handle center should own its pointer hit after canvas framing.' }
-        )
-        .toBe(true);
-      const bounds = await handle.boundingBox();
-      expect(bounds).not.toBeNull();
-      if (!bounds) return;
-      const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-      const hitOwnership = await handle.evaluate((element, point) => {
-        const hit = document.elementFromPoint(point.x, point.y);
-        return {
-          hitClass: hit instanceof HTMLElement ? hit.className : null,
-          hitTag: hit?.tagName ?? null,
-          ownedByHandle: hit !== null && (hit === element || element.contains(hit))
-        };
-      }, start);
-      expect(hitOwnership.ownedByHandle, JSON.stringify(hitOwnership)).toBe(true);
-      const samples: unknown[] = [];
-      const sample = async (checkpoint: string) => {
-        samples.push(
-          await artboard.evaluate((node, name) => {
-            const events = JSON.parse(node.getAttribute('data-selene-drag-events') ?? '[]');
-            return {
-              checkpoint: name,
-              className: node.className,
-              style: node.getAttribute('style'),
-              mode: node.closest('[aria-label="Design canvas"]')?.getAttribute('data-mode'),
-              events
-            };
-          }, checkpoint)
-        );
-      };
-      await sample('before pointer delivery');
-      await window.mouse.move(start.x, start.y);
-      await sample('handle hovered');
-      await window.mouse.down();
-      await sample('pointer held');
-      const moveAndSample = async (step: number) => {
-        await window.mouse.move(start.x + (delta.x * step) / 4, start.y + (delta.y * step) / 4);
-        await sample(`held move ${step}`);
-      };
-      await moveAndSample(1);
-      await moveAndSample(2);
-      await moveAndSample(3);
-      await moveAndSample(4);
-      await window.mouse.up();
-      await sample('pointer released');
-      const evidence = JSON.stringify({ hitOwnership, samples }, null, 2);
-      await testInfo.attach(`canvas-drag-${await artboard.getAttribute('data-id')}.json`, {
-        body: evidence,
-        contentType: 'application/json'
-      });
-      expect(evidence, evidence).toContain('"type": "pointermove"');
-      if (expectedToMove) {
-        expect(evidence, evidence).toContain('"type": "pointerdown"');
-        expect(evidence, evidence).toContain('"type": "mousedown"');
-        expect(evidence, evidence).toContain('"type": "mousemove"');
-        expect(await artboard.getAttribute('class'), evidence).toContain('draggable');
-        expect(evidence, evidence).toContain('dragging');
-      } else {
-        expect(await artboard.getAttribute('class'), evidence).not.toContain('draggable');
-        expect(evidence, evidence).not.toContain('dragging');
-      }
-      // React Flow clears its transient drag class in its post-pointer-up
-      // reconciliation frame. Assert the settled interaction contract rather
-      // than sampling that implementation detail synchronously.
-      await expect(artboard, evidence).not.toHaveClass(/dragging/);
-      return evidence;
-    };
     const expectPresentationFillsViewport = async (viewportName: string) => {
       const presentation = window.getByLabel('Prototype presentation');
       const artifact = presentation.getByLabel('Compiled React artboard');
@@ -764,21 +896,59 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
     ).toBeVisible({ timeout: 15_000 });
-    const activePositionBefore = await activeArtboard.getAttribute('style');
-    const ordersPositionBefore = await ordersArtboard.getAttribute('style');
-    const activeDragEvidence = await dragArtboard(activeArtboard, { x: -50, y: 30 });
+    const readArtboardGeometry = (artboard: Locator) =>
+      artboard.evaluate((node) => {
+        const style = (node as HTMLElement).style;
+        // React Flow's focus/selection elevation is transient UI state. The
+        // host persists positions and authored dimensions, not selected z-index.
+        return {
+          position: style.position,
+          transform: style.transform,
+          width: style.width,
+          height: style.height
+        };
+      });
+    const readSavedScreenPositions = () =>
+      window.evaluate(async () => {
+        const graph = (await window.selene.designer.snapshot()).editablePrototype.graph;
+        const dashboard = graph.nodes.find((node) => node.id === 'dashboard')?.position;
+        const orders = graph.nodes.find((node) => node.id === 'orders')?.position;
+        if (!dashboard || !orders) throw new Error('Authored screen positions are unavailable.');
+        return { dashboard, orders };
+      });
+    const activePositionBefore = await readArtboardGeometry(activeArtboard);
+    const ordersPositionBefore = await readArtboardGeometry(ordersArtboard);
+    const savedPositionsBefore = await readSavedScreenPositions();
+    const activeDragEvidence = await dragArtboard(
+      window,
+      activeArtboard,
+      { x: -50, y: 30 },
+      testInfo
+    );
     await expect
-      .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
-      .not.toBe(activePositionBefore);
-    const ordersDragEvidence = await dragArtboard(ordersArtboard, { x: 60, y: 44 });
+      .poll(() => readArtboardGeometry(activeArtboard), { message: activeDragEvidence })
+      .not.toEqual(activePositionBefore);
     await expect
-      .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
-      .not.toBe(ordersPositionBefore);
+      .poll(async () => (await readSavedScreenPositions()).dashboard)
+      .not.toEqual(savedPositionsBefore.dashboard);
+    const ordersDragEvidence = await dragArtboard(
+      window,
+      ordersArtboard,
+      { x: 60, y: 44 },
+      testInfo
+    );
+    await expect
+      .poll(() => readArtboardGeometry(ordersArtboard), { message: ordersDragEvidence })
+      .not.toEqual(ordersPositionBefore);
+    await expect
+      .poll(async () => (await readSavedScreenPositions()).orders)
+      .not.toEqual(savedPositionsBefore.orders);
     await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       /Saved graph revision \d+\./
     );
-    const persistedActivePosition = await activeArtboard.getAttribute('style');
-    const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
+    const persistedActivePosition = await readArtboardGeometry(activeArtboard);
+    const persistedOrdersPosition = await readArtboardGeometry(ordersArtboard);
+    const persistedScreenPositions = await readSavedScreenPositions();
 
     await window.reload();
     const reloadedCanvas = window.getByLabel('Design canvas');
@@ -786,14 +956,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
       timeout: 5_000
     });
-    await expect(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]')).toHaveAttribute(
-      'style',
-      persistedActivePosition ?? ''
-    );
-    await expect(reloadedCanvas.locator('.react-flow__node[data-id="orders"]')).toHaveAttribute(
-      'style',
-      persistedOrdersPosition ?? ''
-    );
+    await expect
+      .poll(() =>
+        readArtboardGeometry(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]'))
+      )
+      .toEqual(persistedActivePosition);
+    await expect
+      .poll(() =>
+        readArtboardGeometry(reloadedCanvas.locator('.react-flow__node[data-id="orders"]'))
+      )
+      .toEqual(persistedOrdersPosition);
+    await expect.poll(readSavedScreenPositions).toEqual(persistedScreenPositions);
 
     await expect(canvas).toHaveAttribute('data-mode', 'design');
     await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
@@ -1274,6 +1447,280 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     throw error;
   } finally {
     if (application) await closeElectron(application);
+    await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('persists integrated flow undo, redo, keyboard edits and pointer reconnection', async ({
+  browserName: _browserName
+}, testInfo) => {
+  test.setTimeout(90_000);
+  const userData = await mkdtemp(join(tmpdir(), 'selene-canvas-flow-history-'));
+  const application = await electron.launch({
+    executablePath: await electronExecutable(),
+    args: desktopArgs(userData)
+  });
+  try {
+    const window = await application.firstWindow({ timeout: 5_000 });
+    await window.setViewportSize({ width: 1280, height: 900 });
+    await window.bringToFront();
+    await window.getByLabel('Project name').fill('Flow history journey');
+    await window.getByRole('button', { name: 'Create project' }).click();
+    await expect
+      .poll(() =>
+        window.evaluate(async () => (await window.selene.designer.snapshot()).source.revision.id)
+      )
+      .toMatch(/^flow-history-journey-/);
+    const canvas = window.getByLabel('Design canvas');
+    const tools = canvas.getByRole('toolbar', { name: 'Canvas tools' });
+    const undo = tools.getByRole('button', { name: 'Undo flow change', exact: true });
+    const redo = tools.getByRole('button', { name: 'Redo flow change', exact: true });
+    const readGraph = () =>
+      window.evaluate(async () => (await window.selene.designer.snapshot()).editablePrototype);
+    const before = await readGraph();
+    const originalSourceRevision = await window.evaluate(
+      async () => (await window.selene.designer.snapshot()).source.revision.id
+    );
+    const originalPosition = before.graph.nodes.find((node) => node.id === 'dashboard')?.position;
+    const originalConnection = before.graph.transitions.find(
+      (transition) => transition.from.nodeId === 'dashboard' && transition.kind === 'navigate'
+    );
+    if (!originalPosition || !originalConnection || !('to' in originalConnection))
+      throw new Error('The desktop fixture must contain Dashboard navigation.');
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    const compiledArtboard = canvas.getByLabel('Compiled React artboard');
+    await expect(compiledArtboard).toHaveAttribute('data-preview-state', 'ready');
+    const dashboardFrame = compiledArtboard.frameLocator(
+      'iframe[title="Generated React preview frame"]'
+    );
+    await expect(dashboardFrame.locator('html')).toHaveAttribute(
+      'data-preview-revision-id',
+      originalSourceRevision
+    );
+    await expect(
+      dashboardFrame.getByRole('heading', { name: /^Dashboard(?: workspace)?$/ })
+    ).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-mode', 'design');
+    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    const dashboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
+    const dragEvidence = await dragArtboard(window, dashboard, { x: 45, y: 30 }, testInfo);
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position,
+        { message: dragEvidence }
+      )
+      .not.toEqual(originalPosition);
+    const movedPosition = (await readGraph()).graph.nodes.find(
+      (node) => node.id === 'dashboard'
+    )?.position;
+    await expect(undo).toBeEnabled();
+    await undo.click();
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position
+      )
+      .toEqual(originalPosition);
+    await expect(redo).toBeEnabled();
+    await redo.click();
+    await expect
+      .poll(
+        async () =>
+          (await readGraph()).graph.nodes.find((node) => node.id === 'dashboard')?.position
+      )
+      .toEqual(movedPosition);
+
+    await tools.getByRole('button', { name: 'Connections', exact: true }).click();
+    const editor = canvas.getByRole('form', { name: 'Prototype connection editor' });
+    await editor.getByLabel('Connection', { exact: true }).selectOption(originalConnection.id);
+    const destination = editor.getByLabel('Connection destination', { exact: true });
+    const beforeInvalid = await readGraph();
+    await destination.selectOption('');
+    await editor.getByRole('button', { name: 'Save connection', exact: true }).click();
+    await expect(editor.getByRole('alert')).toContainText(
+      'Navigation needs a screen or page destination.'
+    );
+    expect(await readGraph()).toEqual(beforeInvalid);
+    await expect(undo).toBeEnabled();
+    await destination.selectOption('orders');
+    await window.bringToFront();
+    await destination.focus();
+    await expect(destination).toBeFocused();
+    await window.keyboard.press('d');
+    await expect(destination).toHaveValue('dashboard');
+    const saveConnection = editor.getByRole('button', { name: 'Save connection', exact: true });
+    await saveConnection.focus();
+    await window.keyboard.press('Enter');
+    const target = async () => {
+      const transition = (await readGraph()).graph.transitions.find(
+        (item) => item.id === originalConnection.id
+      );
+      return transition && 'to' in transition ? transition.to.nodeId : undefined;
+    };
+    await expect.poll(target).toBe('dashboard');
+    await expect(undo).toBeEnabled();
+    await undo.focus();
+    await window.keyboard.press('Meta+z');
+    await expect.poll(target).toBe('orders');
+    await expect(redo).toBeEnabled();
+    await redo.focus();
+    await window.keyboard.press('Meta+Shift+z');
+    await expect.poll(target).toBe('dashboard');
+    await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
+    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    const edge = canvas.locator(`.react-flow__edge[data-id="${originalConnection.id}"]`);
+    await edge.focus();
+    await window.keyboard.press('Enter');
+    await expect(edge).toHaveClass(/selected/);
+    await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
+    const reconnectAnchor = edge.locator('.react-flow__edgeupdater-target');
+    const ordersTarget = canvas.locator(
+      '.react-flow__node[data-id="orders"] .canvas-artboard__target-handle'
+    );
+    await expect(reconnectAnchor).toBeVisible();
+    await expect(ordersTarget).toBeVisible();
+    await expect(reconnectAnchor).toBeInViewport();
+    await expect(ordersTarget).toBeInViewport();
+    let previousReconnectBounds: Awaited<ReturnType<typeof reconnectAnchor.boundingBox>>;
+    let stableReconnectFrames = 0;
+    await expect
+      .poll(
+        async () => {
+          const bounds = await reconnectAnchor.boundingBox();
+          if (!bounds) return false;
+          const stable =
+            previousReconnectBounds &&
+            Math.abs(bounds.x - previousReconnectBounds.x) < 0.5 &&
+            Math.abs(bounds.y - previousReconnectBounds.y) < 0.5;
+          stableReconnectFrames = stable ? stableReconnectFrames + 1 : 0;
+          previousReconnectBounds = bounds;
+          return stableReconnectFrames >= 3;
+        },
+        { intervals: [80] }
+      )
+      .toBe(true);
+    const reconnectBounds = await reconnectAnchor.boundingBox();
+    const targetBounds = await ordersTarget.boundingBox();
+    if (!reconnectBounds || !targetBounds)
+      throw new Error('Connection handles need physical bounds.');
+    await testInfo.attach('integrated-flow-reconnection-geometry.json', {
+      body: JSON.stringify(
+        await window.evaluate(
+          ({ reconnectBounds: anchorRect, targetBounds: destinationRect }) =>
+            [anchorRect, destinationRect].map((bounds) => {
+              const hit = document.elementFromPoint(
+                bounds.x + bounds.width / 2,
+                bounds.y + bounds.height / 2
+              );
+              return { bounds, hit: hit?.outerHTML.slice(0, 500) };
+            }),
+          { reconnectBounds, targetBounds }
+        ),
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
+    await window.mouse.move(
+      reconnectBounds.x + reconnectBounds.width / 2,
+      reconnectBounds.y + reconnectBounds.height / 2
+    );
+    await window.mouse.down();
+    await window.mouse.move(
+      targetBounds.x + targetBounds.width / 2,
+      targetBounds.y + targetBounds.height / 2,
+      { steps: 8 }
+    );
+    await window.mouse.up();
+    await expect.poll(target).toBe('orders');
+    await canvas.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    const inspectConnection = window.locator('.contextual-inspector details').filter({
+      has: window.locator('summary').filter({ hasText: /^Prototype connection$/ })
+    });
+    const inspectDestination = inspectConnection
+      .locator('.review-thread-row')
+      .filter({ has: window.locator('dt').filter({ hasText: /^Destination$/ }) })
+      .locator('dd');
+    await expect(inspectDestination).toHaveText('Orders');
+    await expect(editor).toBeHidden();
+    await undo.click();
+    await expect.poll(target).toBe('dashboard');
+    await expect(inspectDestination).toHaveText('Dashboard');
+    await expect(editor).toBeHidden();
+    await redo.click();
+    await expect.poll(target).toBe('orders');
+    await expect(inspectDestination).toHaveText('Orders');
+    await expect(editor).toBeHidden();
+
+    const connections = tools.getByRole('button', { name: 'Connections', exact: true });
+    await connections.click();
+    await expect(editor).toBeVisible();
+    await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
+    await expect(connections).toBeFocused();
+    await window.keyboard.press('Escape');
+    await expect(edge).not.toHaveClass(/selected/);
+    await expect(inspectConnection).toHaveCount(0);
+    await edge.focus();
+    await window.keyboard.press('Enter');
+    await expect(edge).toHaveClass(/selected/);
+    await expect(inspectDestination).toHaveText('Orders');
+    await expect(editor).toBeVisible();
+    await editor.getByLabel('Connection', { exact: true }).selectOption(originalConnection.id);
+    await editor.getByRole('button', { name: 'Delete connection', exact: true }).click();
+    await expect.poll(target).toBeUndefined();
+    await undo.click();
+    await expect.poll(target).toBe('orders');
+    await redo.click();
+    await expect.poll(target).toBeUndefined();
+    await undo.click();
+    await expect.poll(target).toBe('orders');
+    const saved = await readGraph();
+    expect(saved.revision).toBeGreaterThan(before.revision);
+    expect(
+      await window.evaluate(
+        async () => (await window.selene.designer.snapshot()).source.revision.id
+      )
+    ).toBe(originalSourceRevision);
+    const historyEvidence = testInfo.outputPath('integrated-flow-history.json');
+    await writeFile(
+      historyEvidence,
+      JSON.stringify(
+        { before, saved, originalSourceRevision, originalPosition, movedPosition },
+        null,
+        2
+      )
+    );
+    await testInfo.attach('integrated-flow-history.json', {
+      path: historyEvidence,
+      contentType: 'application/json'
+    });
+    const wideScreenshot = testInfo.outputPath('integrated-flow-history-wide.png');
+    await window.screenshot({ path: wideScreenshot });
+    await testInfo.attach('integrated-flow-history-wide.png', {
+      path: wideScreenshot,
+      contentType: 'image/png'
+    });
+    await window.reload();
+    await expect(canvas).toBeVisible();
+    const reloaded = await readGraph();
+    expect(reloaded.graph).toEqual(saved.graph);
+    expect(reloaded.revision).toBe(saved.revision);
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
+    await window.setViewportSize({ width: 620, height: 760 });
+    await tools.getByRole('button', { name: 'Connections', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await expect(editor).toBeInViewport();
+    const compactScreenshot = testInfo.outputPath('integrated-flow-history-compact.png');
+    await window.screenshot({ path: compactScreenshot });
+    await testInfo.attach('integrated-flow-history-compact.png', {
+      path: compactScreenshot,
+      contentType: 'image/png'
+    });
+  } finally {
+    await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

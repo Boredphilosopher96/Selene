@@ -20,6 +20,8 @@ import {
 } from '@selene/identity-runtime';
 import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node';
 
+import { LifecyclePrototypeGraphPersistencePort } from './lifecycle-prototype-graph';
+import { createNpmDesignInputPort } from './npm-design-input-adapter';
 import { ConfiguredProcessDesignerAdapter, loadTrustedAgentConfiguration } from './agent-config';
 import { createEmbeddedBuildMetadataPort } from './build-metadata';
 import { MktempGeneratedProjectMaterializer } from './generated-project-materializer';
@@ -427,19 +429,36 @@ async function initializeDesktopDiagnostics(): Promise<void> {
   const collaborationAuthorId = await new FileLocalCollaborationAuthorPort(
     join(app.getPath('userData'), 'private-collaboration-v1', 'author.json')
   ).authorId();
+  const npmInputs = createNpmDesignInputPort();
+  const demoInputs = createLocalCatalogFixturePort();
+  const isDemoPackage = (input: { readonly name: string; readonly version: string }) =>
+    input.name === '@selene/design-tokens' && input.version === '1.0.0';
   designer = new DesktopDesignerApplicationService(
     createEmbeddedBuildMetadataPort(),
     diagnostics,
-    new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1')),
+    new LifecyclePrototypeGraphPersistencePort(
+      localLifecycle,
+      new JsonPrototypeGraphPersistencePort(join(app.getPath('userData'), 'designer-flow-v1'))
+    ),
     new DesktopDesignSystemIntake(
-      createLocalCatalogFixturePort(),
+      {
+        resolvePackage: (context, input) =>
+          (isDemoPackage(input) ? demoInputs : npmInputs).resolvePackage(context, input),
+        readDesignLanguage: (context, input) =>
+          (input.location.startsWith('npm:@selene/design-tokens@1.0.0/')
+            ? demoInputs
+            : npmInputs
+          ).readDesignLanguage(context, input),
+        sha256: (context, input) => npmInputs.sha256(context, input)
+      },
       desktopDesignInputRuntime,
       {
         requiredPeerDependencies: { react: '^19.0.0' },
         provider: {
-          label: 'demo-only local catalog fixture',
-          fixture: 'demo-only-local-catalog',
-          supports: (input) => input.name === '@selene/design-tokens' && input.version === '1.0.0'
+          label: 'npm registry',
+          fixtureFor: (input) =>
+            isDemoPackage(input) ? 'demo-only local catalog fixture' : undefined,
+          supports: () => true
         }
       },
       designSystemCompilerRegistry
@@ -986,6 +1005,12 @@ function createWindow(): void {
   designerHandler('selene:designer:apply-manual-element-remove', (value) =>
     desktopDesigner.applyManualElementRemove(value)
   );
+  designerHandler('selene:designer:request-manual-element-duplicate-capability', (value) =>
+    desktopDesigner.requestManualElementDuplicateCapability(value)
+  );
+  designerHandler('selene:designer:apply-manual-element-duplicate', (value) =>
+    desktopDesigner.applyManualElementDuplicate(value)
+  );
   designerHandler('selene:designer:request-manual-layout-edit-capability', (value) =>
     desktopDesigner.requestManualLayoutEditCapability(value)
   );
@@ -1034,6 +1059,9 @@ function createWindow(): void {
   );
   designerHandler('selene:designer:undo-latest-manual-design-edit', (value) =>
     desktopDesigner.undoLatestManualDesignEdit(validateManualDesignUndo(value))
+  );
+  designerHandler('selene:designer:redo-latest-manual-design-edit', (value) =>
+    desktopDesigner.redoLatestManualDesignEdit(validateManualDesignUndo(value))
   );
   designerHandler('selene:designer:cancel', (value) => desktopDesigner.cancel(value));
   designerHandler('selene:designer:configure-product-shell', (value) =>

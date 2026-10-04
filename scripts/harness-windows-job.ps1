@@ -10,6 +10,9 @@ public static class HarnessJobSupervisor {
   private const uint JobObjectExtendedLimitInformation = 9;
   private const uint JobObjectLimitKillOnJobClose = 0x00002000;
   private const uint CreateSuspended = 0x00000004;
+  private const int StartfUseStdHandles = 0x00000100;
+  private const uint DuplicateSameAccess = 0x00000002;
+  private const int StdInputHandle = -10, StdOutputHandle = -11, StdErrorHandle = -12;
   private const uint Synchronize = 0x00100000;
   private const uint WaitObject0 = 0;
   private const uint WaitTimeout = 0x00000102;
@@ -52,6 +55,14 @@ public static class HarnessJobSupervisor {
   private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
   [DllImport("kernel32.dll", SetLastError = true)]
   private static extern bool CloseHandle(IntPtr handle);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern IntPtr GetStdHandle(int standardHandle);
+  [DllImport("kernel32.dll")]
+  private static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError = true)]
+  private static extern bool DuplicateHandle(
+    IntPtr sourceProcess, IntPtr sourceHandle, IntPtr targetProcess, out IntPtr targetHandle,
+    uint desiredAccess, bool inheritHandle, uint options);
   [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
   private static extern bool CreateProcess(
     string applicationName, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
@@ -68,6 +79,14 @@ public static class HarnessJobSupervisor {
 
   private static void Require(bool succeeded) {
     if (!succeeded) throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+  private static IntPtr DuplicateStandardHandle(int standardHandle) {
+    IntPtr source = GetStdHandle(standardHandle);
+    if (source == IntPtr.Zero || source == new IntPtr(-1))
+      throw new Win32Exception(6, "Harness standard handle is unavailable.");
+    IntPtr current = GetCurrentProcess(), duplicate;
+    Require(DuplicateHandle(current, source, current, out duplicate, 0, true, DuplicateSameAccess));
+    return duplicate;
   }
   private static string Quote(string value) {
     if (value.Length == 0) return "\"\"";
@@ -91,6 +110,7 @@ public static class HarnessJobSupervisor {
   }
   public static int Run(string applicationName, string[] arguments, int parentPid) {
     IntPtr job = IntPtr.Zero, parent = IntPtr.Zero, process = IntPtr.Zero, thread = IntPtr.Zero;
+    IntPtr input = IntPtr.Zero, output = IntPtr.Zero, error = IntPtr.Zero;
     try {
       parent = OpenProcess(Synchronize, false, parentPid);
       if (parent == IntPtr.Zero) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -106,6 +126,16 @@ public static class HarnessJobSupervisor {
     } finally { Marshal.FreeHGlobal(memory); }
       var startupInfo = new StartupInfo();
       startupInfo.cb = Marshal.SizeOf(startupInfo);
+      // A console child's default handles can bypass redirected harness pipes.
+      // Explicitly duplicate inheritable handles and tell CreateProcess to use
+      // them. The Job Object handle itself remains non-inheritable.
+      input = DuplicateStandardHandle(StdInputHandle);
+      output = DuplicateStandardHandle(StdOutputHandle);
+      error = DuplicateStandardHandle(StdErrorHandle);
+      startupInfo.dwFlags = StartfUseStdHandles;
+      startupInfo.hStdInput = input;
+      startupInfo.hStdOutput = output;
+      startupInfo.hStdError = error;
       ProcessInformation processInfo;
       Require(CreateProcess(applicationName, CommandLine(applicationName, arguments), IntPtr.Zero, IntPtr.Zero,
         true, CreateSuspended, IntPtr.Zero, null, ref startupInfo, out processInfo));
@@ -128,6 +158,9 @@ public static class HarnessJobSupervisor {
         if (parentState != WaitTimeout) throw new Win32Exception(Marshal.GetLastWin32Error());
       }
     } finally {
+      if (input != IntPtr.Zero) CloseHandle(input);
+      if (output != IntPtr.Zero) CloseHandle(output);
+      if (error != IntPtr.Zero) CloseHandle(error);
       if (thread != IntPtr.Zero) CloseHandle(thread);
       if (process != IntPtr.Zero) CloseHandle(process);
       if (job != IntPtr.Zero) CloseHandle(job);

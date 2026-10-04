@@ -48,7 +48,9 @@ function hostedReviewMessage(
   const staticMessage =
     staticReview.status === 'ready'
       ? 'Static review is ready.'
-      : 'No static review artifact was generated.';
+      : staticReview.status === 'prepared'
+        ? 'Static review is committed. Run the Pages workflow to build and deploy it.'
+        : 'No static review artifact was generated.';
   switch (collaboration.status) {
     case 'ready':
       return `${staticMessage} Stakeholder collaboration is ready.`;

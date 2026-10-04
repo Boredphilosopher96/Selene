@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createCompilerRenderedInstanceDigest, migrateDesignRevisionV1 } from '@selene/core';
 
 import {
+  inspectReactTsxDuplicateTarget,
   prepareReactTsxDesignEdit,
   type ReactTsxDesignEditContext
 } from './react-tsx-design-edit-adapter';
@@ -328,6 +329,314 @@ const removeProposal = () => {
   };
 };
 
+const duplicateProposal = (anchors = ['orders.title'], nodeId = 'orders.title') => {
+  const current = proposal();
+  const nodeSource = { ...sourceIdentity, astNodeId: nodeId };
+  const descriptor = { ...instance, instanceId: `instance-${nodeId}` };
+  return {
+    ...current,
+    commands: [
+      {
+        kind: 'duplicate-node',
+        target: {
+          ...current.commands[0]!.target,
+          sourceAnchorId: nodeId,
+          parentSourceAnchorId: 'orders.root',
+          operation: {
+            ...current.commands[0]!.target.operation,
+            node: {
+              ...current.commands[0]!.target.operation.node,
+              nodeId,
+              source: nodeSource,
+              instance: {
+                ...descriptor,
+                instanceDigest: createCompilerRenderedInstanceDigest(
+                  revision,
+                  nodeSource,
+                  descriptor
+                )
+              }
+            }
+          }
+        },
+        sourceAnchorRemaps: anchors.map((anchor) => ({
+          fromSourceAnchorId: anchor,
+          toSourceAnchorId: `${anchor}.copy`
+        }))
+      }
+    ],
+    preconditions: [
+      ...current.preconditions,
+      ...['orders.root', ...anchors].map((sourceAnchorId) => ({
+        kind: 'node-exists',
+        sourceAnchorId
+      })),
+      { kind: 'parent-is', sourceAnchorId: nodeId, parentSourceAnchorId: 'orders.root' }
+    ]
+  };
+};
+
+describe('static compiler-bound duplication', () => {
+  it('duplicates disjoint static siblings from the original AST in one patch independent of command order', () => {
+    const current = context();
+    const nodes = ['orders.root', 'orders.title', 'orders.secondary', 'orders.summary'].map(
+      (nodeId) => ({ nodeId, path: 'src/App.tsx', exportName: 'default' })
+    );
+    const bound: ReactTsxDesignEditContext = {
+      ...current,
+      workspace: { ...current.workspace, nodes },
+      sourceBindings: nodes.map((node) => ({
+        ...current.sourceBindings[0]!,
+        sourceAnchorId: node.nodeId
+      }))
+    };
+    const title = duplicateProposal();
+    const secondary = duplicateProposal(['orders.secondary', 'orders.summary'], 'orders.secondary');
+    const preconditions = [...title.preconditions, ...secondary.preconditions].filter(
+      (entry, index, entries) =>
+        entries.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(entry)) ===
+        index
+    );
+    const batch = { ...title, commands: [...secondary.commands, ...title.commands], preconditions };
+    const result = prepareReactTsxDesignEdit(batch, bound);
+    if (result.kind !== 'prepared') throw new Error(`Batch duplicate unavailable: ${result.code}`);
+    expect(result.proposal.commands).toHaveLength(2);
+    expect(result.patch.nextContent).toBe(
+      source
+        .replace(
+          '<h1 data-selene-node-id="orders.title">Orders</h1>',
+          '<h1 data-selene-node-id="orders.title">Orders</h1><h1 data-selene-node-id="orders.title.copy">Orders</h1>'
+        )
+        .replace(
+          '<section data-selene-node-id="orders.secondary" style={{ display: \'grid\' }}><p data-selene-node-id="orders.summary">Summary</p></section>',
+          '<section data-selene-node-id="orders.secondary" style={{ display: \'grid\' }}><p data-selene-node-id="orders.summary">Summary</p></section><section data-selene-node-id="orders.secondary.copy" style={{ display: \'grid\' }}><p data-selene-node-id="orders.summary.copy">Summary</p></section>'
+        )
+    );
+    expect(result.patch.addedNodes?.map((node) => node.nodeId)).toEqual([
+      'orders.secondary.copy',
+      'orders.summary.copy',
+      'orders.title.copy'
+    ]);
+    const reversed = prepareReactTsxDesignEdit(
+      { ...batch, commands: [...title.commands, ...secondary.commands] },
+      bound
+    );
+    expect(reversed.kind === 'prepared' ? reversed.patch.nextContent : reversed).toBe(
+      result.patch.nextContent
+    );
+    const unsafe = {
+      ...bound,
+      workspace: {
+        ...bound.workspace,
+        files: [
+          {
+            path: 'src/App.tsx',
+            language: 'tsx' as const,
+            content: source.replace(
+              'data-selene-node-id="orders.summary"',
+              'data-selene-node-id="orders.summary" onClick={save}'
+            )
+          }
+        ]
+      }
+    };
+    expect(prepareReactTsxDesignEdit(batch, unsafe)).toEqual({
+      kind: 'rejected',
+      code: 'UNSAFE_DUPLICATE'
+    });
+    expect(bound.workspace.files[0]?.content).toBe(source);
+  });
+
+  it('rejects overlapping roots, different parents and more than64 total mapped anchors atomically', () => {
+    const title = duplicateProposal();
+    const second = {
+      ...title.commands[0]!,
+      sourceAnchorRemaps: [
+        { fromSourceAnchorId: 'orders.title', toSourceAnchorId: 'orders.title.second-copy' }
+      ]
+    };
+    expect(
+      prepareReactTsxDesignEdit({ ...title, commands: [...title.commands, second] }, context())
+    ).toEqual({ kind: 'rejected', code: 'UNSAFE_DUPLICATE' });
+    const elsewhere = duplicateProposal(['orders.secondary'], 'orders.secondary');
+    const command = {
+      ...elsewhere.commands[0]!,
+      target: { ...elsewhere.commands[0]!.target, parentSourceAnchorId: 'another.parent' }
+    };
+    const different = {
+      ...title,
+      commands: [...title.commands, command],
+      preconditions: [
+        ...title.preconditions,
+        { kind: 'node-exists', sourceAnchorId: 'orders.secondary' },
+        { kind: 'node-exists', sourceAnchorId: 'another.parent' },
+        {
+          kind: 'parent-is',
+          sourceAnchorId: 'orders.secondary',
+          parentSourceAnchorId: 'another.parent'
+        }
+      ]
+    };
+    expect(prepareReactTsxDesignEdit(different, context())).toEqual({
+      kind: 'rejected',
+      code: 'UNSAFE_DUPLICATE'
+    });
+    const firstAnchors = [
+      'orders.title',
+      ...Array.from({ length: 32 }, (_, index) => `first-${index}`)
+    ];
+    const secondAnchors = [
+      'orders.secondary',
+      ...Array.from({ length: 31 }, (_, index) => `second-${index}`)
+    ];
+    const first = duplicateProposal(firstAnchors);
+    const last = duplicateProposal(secondAnchors, 'orders.secondary');
+    const preconditions = [...first.preconditions, ...last.preconditions].filter(
+      (entry, index, entries) =>
+        entries.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(entry)) ===
+        index
+    );
+    expect(
+      prepareReactTsxDesignEdit(
+        { ...first, commands: [...first.commands, ...last.commands], preconditions },
+        context()
+      )
+    ).toEqual({ kind: 'rejected', code: 'UNSAFE_DUPLICATE' });
+  });
+  it('duplicates exact authored markup after the target and assigns every descendant a fresh marker', () => {
+    const current = context();
+    const subtree =
+      '<h1 data-selene-node-id="orders.title" style={{ color: "red", opacity: 0.8 }}><span data-selene-node-id={"orders.detail"}>Orders &amp; details</span><br />{42}{/* preserve comment */}</h1>';
+    const authored = source.replace('<h1 data-selene-node-id="orders.title">Orders</h1>', subtree);
+    const bound: ReactTsxDesignEditContext = {
+      ...current,
+      sourceBindings: [
+        ...current.sourceBindings,
+        { ...current.sourceBindings[1]!, sourceAnchorId: 'orders.detail' }
+      ],
+      workspace: {
+        ...current.workspace,
+        files: [{ path: 'src/App.tsx', content: authored, language: 'tsx' }],
+        nodes: [
+          ...current.workspace.nodes,
+          { nodeId: 'orders.detail', path: 'src/App.tsx', exportName: 'default' }
+        ]
+      }
+    };
+    expect(inspectReactTsxDuplicateTarget(bound.workspace, 'orders.title')).toEqual({
+      kind: 'supported',
+      parentSourceAnchorId: 'orders.root',
+      sourceAnchorIds: ['orders.detail', 'orders.title']
+    });
+    const result = prepareReactTsxDesignEdit(
+      duplicateProposal(['orders.title', 'orders.detail']),
+      bound
+    );
+    if (result.kind !== 'prepared') throw new Error(`Duplicate unavailable: ${result.code}`);
+    const cloned = subtree
+      .replace('"orders.title"', '"orders.title.copy"')
+      .replace('"orders.detail"', '"orders.detail.copy"');
+    expect(result.patch.nextContent).toBe(authored.replace(subtree, `${subtree}${cloned}`));
+    expect(result.patch.previousContent).toBe(authored);
+    expect(result.patch.addedNodes).toEqual([
+      { nodeId: 'orders.title.copy', path: 'src/App.tsx', exportName: 'default' },
+      { nodeId: 'orders.detail.copy', path: 'src/App.tsx', exportName: 'default' }
+    ]);
+    expect(bound.workspace.files[0]?.content).toBe(authored);
+    expect(prepareReactTsxDesignEdit(duplicateProposal(), bound)).toEqual({
+      kind: 'rejected',
+      code: 'SOURCE_BINDING_MISMATCH'
+    });
+  });
+
+  it('rejects identity associations, executable props and dynamic boundaries without changing source', () => {
+    const current = context();
+    for (const replacement of [
+      '<h1 data-selene-node-id="orders.title" id="title">Orders</h1>',
+      '<label data-selene-node-id="orders.title" htmlFor="field">Orders</label>',
+      '<h1 data-selene-node-id="orders.title" aria-labelledby="title">Orders</h1>',
+      '<h1 data-selene-node-id="orders.title" onClick={() => save()}>Orders</h1>',
+      '<h1 data-selene-node-id="orders.title" ref={titleRef}>Orders</h1>',
+      '<h1 data-selene-node-id="orders.title" {...props}>Orders</h1>',
+      '<h1 data-selene-node-id="orders.title">{orders.map(renderOrder)}</h1>',
+      '<Title data-selene-node-id="orders.title">Orders</Title>',
+      '<h1 data-selene-node-id="orders.title" data-selene-action-port="save">Orders</h1>',
+      '<h1 data-selene-node-id="orders.title">Orders</h1>{showSummary && <p>Summary</p>}'
+    ]) {
+      const content = source.replace(
+        '<h1 data-selene-node-id="orders.title">Orders</h1>',
+        replacement
+      );
+      const bound = {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content, language: 'tsx' as const }]
+        }
+      };
+      expect(prepareReactTsxDesignEdit(duplicateProposal(), bound)).toEqual({
+        kind: 'rejected',
+        code: 'UNSAFE_DUPLICATE'
+      });
+      expect(bound.workspace.files[0]?.content).toBe(content);
+    }
+  });
+
+  it('rejects root duplication, marker collisions, stale authority and missing descendant bindings', () => {
+    const current = context();
+    expect(inspectReactTsxDuplicateTarget(current.workspace, 'orders.root')).toEqual({
+      kind: 'unavailable',
+      code: 'UNSUPPORTED_CONTAINER'
+    });
+    expect(
+      prepareReactTsxDesignEdit(duplicateProposal(), {
+        ...current,
+        sourceDigest: digest('changed')
+      })
+    ).toEqual({ kind: 'conflict', code: 'STALE_SOURCE' });
+    expect(
+      prepareReactTsxDesignEdit(duplicateProposal(), {
+        ...current,
+        sourceBindings: current.sourceBindings.filter(
+          (binding) => binding.sourceAnchorId !== 'orders.root'
+        )
+      })
+    ).toEqual({ kind: 'rejected', code: 'SOURCE_BINDING_MISMATCH' });
+    const collision = {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        files: [
+          ...current.workspace.files,
+          {
+            path: 'src/Other.tsx',
+            content:
+              'export default function Other(){return <div data-selene-node-id="orders.title.copy"/>}',
+            language: 'tsx' as const
+          }
+        ]
+      }
+    };
+    expect(prepareReactTsxDesignEdit(duplicateProposal(), collision)).toEqual({
+      kind: 'rejected',
+      code: 'DUPLICATE_IDENTITY_CONFLICT'
+    });
+    const repeated = source.replace(
+      '</main>',
+      '<h2 data-selene-node-id="orders.title">Repeated</h2></main>'
+    );
+    expect(
+      prepareReactTsxDesignEdit(duplicateProposal(), {
+        ...current,
+        workspace: {
+          ...current.workspace,
+          files: [{ path: 'src/App.tsx', content: repeated, language: 'tsx' }]
+        }
+      })
+    ).toEqual({ kind: 'conflict', code: 'AMBIGUOUS_TARGET' });
+  });
+});
+
 const reparentProposal = () => {
   const current = proposal();
   const target = {
@@ -569,11 +878,13 @@ describe('React TSX design edit preparation', () => {
       '<Button disabled={false} label="Open &quot;orders&quot; &lt;now&gt; &amp; safely" priority={2} data-selene-node-id="orders.primary-action" /><section'
     );
     expect(result.patch.dependency).toBe('@acme/design-system/button');
-    expect(result.patch.addedNode).toEqual({
-      nodeId: 'orders.primary-action',
-      path: 'src/App.tsx',
-      exportName: 'default'
-    });
+    expect(result.patch.addedNodes).toEqual([
+      {
+        nodeId: 'orders.primary-action',
+        path: 'src/App.tsx',
+        exportName: 'default'
+      }
+    ]);
     // Replaying the same approved proposal before persistence is deterministic:
     // the host can safely deduplicate it by its proposal digest.
     expect(
@@ -615,7 +926,7 @@ describe('React TSX design edit preparation', () => {
     );
     expect(result.patch.nextContent).toContain('// Keep this comment byte-identical.');
     expect(result.patch.dependency).toBe('@acme/design-system/heading');
-    expect(result.patch.addedNode).toBeUndefined();
+    expect(result.patch.addedNodes).toBeUndefined();
     const selfClosingSource = source.replace(
       '<h1 data-selene-node-id="orders.title">Orders</h1>',
       '<OrderHeading data-selene-node-id="orders.title" />'

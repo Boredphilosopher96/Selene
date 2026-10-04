@@ -60,6 +60,25 @@ describe('protected signing gate', () => {
   });
 });
 
+describe('Changesets version preparation', () => {
+  it('uses the supported version-only action inputs without enabling package publication', async () => {
+    const workflow = await readFile(
+      new URL('../.github/workflows/release-preparation.yml', import.meta.url),
+      'utf8'
+    );
+    const versionJob = workflow.split('  version-packages:')[1]?.split('  release-dry-run:')[0];
+    expect(versionJob).toBeDefined();
+    expect(versionJob).toContain('version-script: bun run version-packages');
+    expect(versionJob).toContain("commit-message: 'chore: version packages'");
+    expect(versionJob).toContain("pr-title: 'chore: version packages'");
+    expect(versionJob).toContain('github-token: ${{ github.token }}');
+    expect(versionJob).toContain('contents: write');
+    expect(versionJob).toContain('pull-requests: write');
+    expect(versionJob).not.toMatch(/^\s+(version|commit|title|publish|publish-script):/m);
+    expect(versionJob).not.toContain('GITHUB_TOKEN:');
+  });
+});
+
 describe('signed release artifact selection', () => {
   it('uses bounded staged assets and keeps verified Linux alongside signed macOS and Windows', async () => {
     const workflow = await readFile(

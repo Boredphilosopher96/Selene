@@ -6,7 +6,12 @@ import { createHash } from 'node:crypto';
 
 import {
   parsePrototypeGraph,
+  serializeCanonicalData,
   validateReactSourceWorkspace,
+  validateReactBindingManifest,
+  type ReactBuildArtifact,
+  type ReactBindingManifest,
+  type ReactBindingCompilerEvidence,
   type EnterpriseScenario,
   type PrototypeGraph,
   type ReactSourceWorkspace
@@ -23,7 +28,10 @@ import {
   canonicalGitHubPullRequestUrl,
   canonicalGitHubRepository
 } from '../shared/github-repository';
+import type { LocalDesignerState } from './project-lifecycle';
 import type { GeneratedProjectFilePlan } from './generated-project-template';
+import { digestReactBuildOutput } from './react-build-output-digest';
+import { issueReactBindingCompilerEvidence } from './react-binding-evidence';
 
 export interface PersistedPrototypeGraph {
   readonly revision: number;
@@ -37,17 +45,27 @@ export interface PrototypeGraphRecoveryReceipt {
   readonly capturedSha256: string;
 }
 
+/** Commit canonical graph/review state before publishing recovery; undefined keeps legacy ownership. */
+export type PrototypeGraphRecoveryCommit = (
+  saved: PersistedPrototypeGraph
+) => Promise<PersistedPrototypeGraph | undefined>;
+
 /** Main-owned CAS boundary; renderers submit data but never select a disk path. */
 export interface PrototypeGraphPersistencePort {
+  readonly commitsDesignerState?: true;
   read(projectId: string): Promise<PersistedPrototypeGraph | undefined>;
   compareAndSwap(
     projectId: string,
     expectedRevision: number,
-    graph: PrototypeGraph
+    graph: PrototypeGraph,
+    state?: LocalDesignerState
   ): Promise<PersistedPrototypeGraph>;
+  /** Legacy adapters must invoke commitRecovery before publishing or clearing the recovery fence. */
   recoverFromFixture(
     projectId: string,
-    graph: PrototypeGraph
+    graph: PrototypeGraph,
+    state?: LocalDesignerState,
+    commitRecovery?: PrototypeGraphRecoveryCommit
   ): Promise<{
     readonly saved: PersistedPrototypeGraph;
     readonly receipt: PrototypeGraphRecoveryReceipt;
@@ -94,7 +112,8 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   private static readonly maxGraphBytes = 256 * 1024;
   public constructor(private readonly directory: string) {}
   private path(projectId: string): string {
-    if (!/^[a-z][a-z0-9-]{0,63}$/.test(projectId)) throw new Error('project ID is invalid');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(projectId))
+      throw new Error('project ID is invalid');
     const root = resolve(this.directory);
     const candidate = resolve(root, `${encodeURIComponent(projectId)}.json`);
     if (relative(root, candidate).startsWith('..'))
@@ -308,7 +327,9 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
   }
   public async recoverFromFixture(
     projectId: string,
-    graph: PrototypeGraph
+    graph: PrototypeGraph,
+    _state?: LocalDesignerState,
+    commitRecovery?: PrototypeGraphRecoveryCommit
   ): Promise<{
     readonly saved: PersistedPrototypeGraph;
     readonly receipt: PrototypeGraphRecoveryReceipt;
@@ -353,7 +374,7 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         }
         evidence = await this.recoveryEvidence(recovery);
       }
-      // Rename is the recovery boundary. Evidence is bounded, while the
+      // Rename is the quarantine boundary. Evidence is bounded, while the
       // immutable quarantine remains intact if fixture replacement fails.
       await this.writeAtomically(
         `${recovery}.receipt.json`,
@@ -367,12 +388,20 @@ export class JsonPrototypeGraphPersistencePort implements PrototypeGraphPersiste
         0o700
       );
       const saved = { revision: 1, graph: parsePrototypeGraph(graph) };
-      // The marker and quarantine remain durable, so the next open cannot
-      // mistake an interrupted recovery for a missing project.
-      await this.writeAtomically(path, JSON.stringify(saved));
-      await rm(markerPath, { force: true });
+      // Keep the pending fence until the owner commits graph and review state.
+      // A failed canonical commit must never publish a recovered legacy graph.
+      const canonical = await commitRecovery?.(saved);
+      if (canonical !== undefined) {
+        // Canonical reads now bypass legacy storage. Cleanup failure must not
+        // report a committed recovery as rolled back; its fence remains safe.
+        await rm(markerPath, { force: true }).catch(() => undefined);
+      } else {
+        // Without a canonical owner, the fixture and marker are the boundary.
+        await this.writeAtomically(path, JSON.stringify(saved));
+        await rm(markerPath, { force: true });
+      }
       return {
-        saved,
+        saved: canonical ?? saved,
         receipt: {
           recoveryId,
           originalBytes: evidence.originalBytes,
@@ -423,6 +452,11 @@ export interface ImmutablePublishBundleInput {
       readonly artifactDigest: string;
       readonly sectionCount: number;
     };
+  };
+  readonly compiledArtifact?: {
+    readonly build: ReactBuildArtifact;
+    readonly reactBinding: ReactBindingManifest;
+    readonly compilerEvidence: ReactBindingCompilerEvidence;
   };
   readonly componentCatalog: DesignerSnapshot['componentCatalog'];
   readonly packageProvenance: {
@@ -493,6 +527,37 @@ function validateImmutablePublishBundleInput(input: ImmutablePublishBundleInput)
   if (!Number.isSafeInteger(input.prototype.revision) || input.prototype.revision < 0)
     throw new Error('publish bundle graph revision is invalid');
   parsePrototypeGraph(input.prototype.graph);
+  if (input.prototype.graph.project.projectId !== input.projectId)
+    throw new Error('publish bundle graph project does not match project ID');
+  if (input.compiledArtifact !== undefined) {
+    const { build, reactBinding, compilerEvidence } = input.compiledArtifact;
+    const receipt = build.receipt;
+    if (
+      receipt === undefined ||
+      build.diagnostics.length !== 0 ||
+      build.revisionId !== input.source.revision.id ||
+      receipt.projectId !== input.projectId ||
+      receipt.sourceRevisionId !== input.source.revision.id ||
+      receipt.sourceSha256 !==
+        createHash('sha256').update(serializeCanonicalData(input.source)).digest('hex') ||
+      receipt.outputSha256 !== digestReactBuildOutput(build) ||
+      compilerEvidence.outputSha256 !== receipt.outputSha256
+    )
+      throw new Error('publish bundle compiler artifact does not match current source and output');
+    const expectedEvidence = issueReactBindingCompilerEvidence(input.source, receipt, {
+      allowedBareDependencies: input.source.dependencies
+    });
+    if (serializeCanonicalData(compilerEvidence) !== serializeCanonicalData(expectedEvidence))
+      throw new Error(
+        'publish bundle compiler evidence does not match its build receipt and source'
+      );
+    validateReactBindingManifest(reactBinding, {
+      graph: input.prototype.graph,
+      graphRevision: input.prototype.revision,
+      workspace: input.source,
+      compilerEvidence
+    });
+  }
   if (!Array.isArray(input.scenarios) || input.scenarios.length > 256)
     throw new Error('publish bundle scenarios are invalid');
   const collaboration = parseSnapshot(input.collaborationSnapshot);

@@ -8,6 +8,20 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: [
+      // Pages builds the web app before workspace dist/ outputs exist. Keep
+      // runtime collaboration contracts on the same sources as TypeScript.
+      {
+        find: /^@selene\/collaboration\/hosted-review$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/collaboration/src/hosted-review.ts', import.meta.url)
+        )
+      },
+      {
+        find: /^@selene\/collaboration$/,
+        replacement: fileURLToPath(
+          new URL('../../packages/collaboration/src/index.ts', import.meta.url)
+        )
+      },
       {
         find: /^@selene\/core\/project$/,
         replacement: fileURLToPath(new URL('../../packages/core/src/project.ts', import.meta.url))

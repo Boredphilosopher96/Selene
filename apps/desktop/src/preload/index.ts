@@ -36,6 +36,8 @@ import type {
   ManualLayoutEditCapabilityRequest,
   ManualTextEditApplyRequest,
   ManualTextEditCapabilityRequest,
+  ManualElementDuplicateApplyRequest,
+  ManualElementDuplicateCapabilityRequest,
   ManualElementRemoveApplyRequest,
   ManualElementRemoveCapabilityRequest,
   RecentProject,
@@ -595,6 +597,18 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke('selene:designer:apply-manual-element-remove', input) as Promise<
         import('@selene/core').DesignEditResult
       >,
+    requestManualElementDuplicateCapability: (input: ManualElementDuplicateCapabilityRequest) =>
+      ipcRenderer.invoke(
+        'selene:designer:request-manual-element-duplicate-capability',
+        input
+      ) as Promise<
+        | import('../shared/designer-api').ManualElementDuplicateCapability
+        | import('../shared/designer-api').ManualElementDuplicateUnavailable
+      >,
+    applyManualElementDuplicate: (input: ManualElementDuplicateApplyRequest) =>
+      ipcRenderer.invoke('selene:designer:apply-manual-element-duplicate', input) as Promise<
+        import('@selene/core').DesignEditResult
+      >,
     requestManualLayoutEditCapability: (input: ManualLayoutEditCapabilityRequest) =>
       ipcRenderer.invoke('selene:designer:request-manual-layout-edit-capability', input) as Promise<
         | import('../shared/designer-api').ManualLayoutEditCapability
@@ -690,6 +704,11 @@ contextBridge.exposeInMainWorld('selene', {
     undoLatestManualDesignEdit: (input: ManualDesignUndoInput) =>
       ipcRenderer.invoke(
         'selene:designer:undo-latest-manual-design-edit',
+        input
+      ) as Promise<DesignerSnapshot>,
+    redoLatestManualDesignEdit: (input: ManualDesignUndoInput) =>
+      ipcRenderer.invoke(
+        'selene:designer:redo-latest-manual-design-edit',
         input
       ) as Promise<DesignerSnapshot>,
     cancel: (requestId: string) => ipcRenderer.invoke('selene:designer:cancel', requestId),

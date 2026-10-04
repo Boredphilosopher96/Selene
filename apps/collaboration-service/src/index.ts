@@ -3,6 +3,7 @@ import { createBffIdentityProvider, createOidcBffHttpHandler } from './oidc-bff.
 import { readServiceEnvironment } from './env.js';
 import { BunPostgresBffStore } from './postgres-bff-store.js';
 import { BunPostgresCollaborationRepository } from './postgres-repository.js';
+import { BunPostgresProjectBackupStore } from './postgres-project-backup.js';
 import { HostedOidcBff, createOpenIdClientRuntime } from '@selene/identity-runtime';
 import { createAddressPinnedOidcTransport } from '@selene/identity-runtime/node';
 import { createSupervisedOidcBffEffects } from './oidc-effect-ports.js';
@@ -53,7 +54,9 @@ const application = repository
             new URL(environment.oidc?.redirectUri ?? '').origin,
             oidcEffects
           )
-        : undefined
+        : undefined,
+      undefined,
+      sql === undefined ? undefined : new BunPostgresProjectBackupStore(sql)
     )
   : createMemoryApplication(environment);
 
