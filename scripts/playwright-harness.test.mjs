@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -15,44 +16,99 @@ import { terminateProcessTree } from './harness-server-process.mjs';
 
 const servers = [];
 const children = [];
-// Hosted Windows process startup crossed the generic 5 s test ceiling while the
-// supervisor still completed correctly. Keep POSIX unchanged and preserve finite,
-// independently enforced startup and whole-test budgets on Windows.
+const observations = new WeakMap();
+// Hosted Windows PowerShell startup can cross the generic 5 s test ceiling.
+// Keep POSIX unchanged and preserve independently enforced startup, exit,
+// descendant, port-release and whole-test budgets on Windows.
 const harnessStartupTimeoutMs = process.platform === 'win32' ? 10_000 : 5_000;
 const concurrentIdentityTimeoutMs = process.platform === 'win32' ? 15_000 : 5_000;
+const harnessExitTimeoutMs = 5_000;
+const harnessCleanupTimeoutMs = 5_000;
+const harnessLifecycleTimeoutMs =
+  process.platform === 'win32'
+    ? harnessStartupTimeoutMs + harnessExitTimeoutMs + harnessCleanupTimeoutMs * 2 + 1_000
+    : 5_000;
 
-async function waitForOutput(child, expected) {
+function observeHarnessChild(child) {
   let output = '';
-  const onData = (chunk) => {
+  let stderr = '';
+  let exitResult;
+  let spawnError;
+  let closed = false;
+  const updates = new EventEmitter();
+  child.stdout.on('data', (chunk) => {
     output += chunk;
-  };
-  child.stdout.on('data', onData);
-  await new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => finish(reject, new Error(`Timed out waiting for ${expected}: ${output}`)),
-      harnessStartupTimeoutMs
-    );
-    const onError = (error) => finish(reject, error);
-    const onExit = (code, signal) =>
-      finish(
-        reject,
-        new Error(`Harness exited before ${expected} (code ${code}, signal ${signal}): ${output}`)
-      );
-    const checkOutput = () => {
-      if (output.includes(expected)) finish(resolve);
-    };
-    const finish = (complete, value) => {
-      clearTimeout(timeout);
-      child.stdout.removeListener('data', checkOutput);
-      child.removeListener('error', onError);
-      child.removeListener('exit', onExit);
-      complete(value);
-    };
-    child.stdout.on('data', checkOutput);
-    child.once('error', onError);
-    child.once('exit', onExit);
+    updates.emit('change');
   });
-  return () => output;
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  // Register before waiting for readiness. Fast fixtures can exit immediately
+  // after their ready line, and an exit event cannot be subscribed to later.
+  child.once('error', (error) => {
+    spawnError = error;
+    updates.emit('change');
+  });
+  child.once('exit', (code, signal) => {
+    exitResult = [code, signal];
+    updates.emit('change');
+  });
+  child.once('close', () => {
+    closed = true;
+    updates.emit('change');
+  });
+  const diagnostics = () => `stdout: ${output}\nstderr: ${stderr}`;
+  const wait = (check, timeoutMs, description) =>
+    new Promise((resolve, reject) => {
+      const finish = (complete, value) => {
+        clearTimeout(timeout);
+        updates.removeListener('change', onChange);
+        complete(value);
+      };
+      const onChange = () => {
+        try {
+          if (spawnError) throw spawnError;
+          const result = check();
+          if (result !== undefined) finish(resolve, result);
+        } catch (error) {
+          finish(reject, error);
+        }
+      };
+      const timeout = setTimeout(
+        () => finish(reject, new Error(`Timed out waiting for ${description}: ${diagnostics()}`)),
+        timeoutMs
+      );
+      updates.on('change', onChange);
+      onChange();
+    });
+  const observation = {
+    output: () => output,
+    stderr: () => stderr,
+    waitForOutput: (expected, timeoutMs = harnessStartupTimeoutMs) =>
+      wait(
+        () => {
+          if (output.includes(expected)) return () => output;
+          if (closed) {
+            const [code, signal] = exitResult ?? [child.exitCode, child.signalCode];
+            throw new Error(
+              `Harness exited before ${expected} (code ${code}, signal ${signal}): ${diagnostics()}`
+            );
+          }
+        },
+        timeoutMs,
+        expected
+      ),
+    // close follows exit and drained stdio, including inherited descendant
+    // handles. Checking the cached result also covers an already-ended fixture.
+    waitForExit: () =>
+      wait(
+        () => (closed ? exitResult : undefined),
+        harnessExitTimeoutMs,
+        'harness exit and closed stdio'
+      )
+  };
+  observations.set(child, observation);
+  return observation;
 }
 
 async function reservePort() {
@@ -84,7 +140,7 @@ async function expectPortReusableBefore(port, timeoutAt) {
 }
 
 async function expectPortReusable(port) {
-  await expectPortReusableBefore(port, Date.now() + 5_000);
+  await expectPortReusableBefore(port, Date.now() + harnessCleanupTimeoutMs);
 }
 
 function expectProcessGone(pid) {
@@ -124,7 +180,7 @@ async function waitForProcessGone(pid) {
     timeout = setTimeout(() => {
       clearInterval(timer);
       reject(new Error(`Timed out waiting for process ${pid} to exit.`));
-    }, 5_000);
+    }, harnessCleanupTimeoutMs);
     check();
   });
 }
@@ -202,7 +258,8 @@ async function startHarness(port, identity = 'fixture', commandFixture = fixture
     { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] }
   );
   children.push(child);
-  return { child, output: await waitForOutput(child, 'ready') };
+  const observation = observeHarnessChild(child);
+  return { child, ...observation, output: await observation.waitForOutput('ready') };
 }
 
 async function startHarnessWithArguments(port, commandFixture, commandArguments) {
@@ -220,7 +277,8 @@ async function startHarnessWithArguments(port, commandFixture, commandArguments)
     { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] }
   );
   children.push(child);
-  return { child, output: await waitForOutput(child, 'grandchild-ready') };
+  const observation = observeHarnessChild(child);
+  return { child, ...observation, output: await observation.waitForOutput('grandchild-ready') };
 }
 
 function windowsSupervisorFixture(expectedArguments, exitCode) {
@@ -230,8 +288,10 @@ function windowsSupervisorFixture(expectedArguments, exitCode) {
     'const receivedArguments = process.argv.slice(1);',
     'if (JSON.stringify(receivedArguments) !== JSON.stringify(expectedArguments)) { console.error(JSON.stringify({ expectedArguments, receivedArguments })); process.exit(91); }',
     "console.log('argument-fidelity-ok');",
+    "console.error('argument-fidelity-stderr');",
     'const port = Number(process.argv[1]);',
     `const grandchild = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildFixture)}, String(port)], { stdio: ['ignore', 'pipe', 'inherit'] });`,
+    'console.log(`grandchild-pid:${grandchild.pid}`);',
     "grandchild.stdout.on('data', (chunk) => { process.stdout.write(chunk); if (chunk.includes('grandchild-ready')) {",
     exitCode === undefined ? '' : `  setTimeout(() => process.exit(${exitCode}), 25);`,
     '}});'
@@ -250,23 +310,82 @@ function findAdjacentWorktreeBlocks() {
   throw new Error('Could not find adjacent deterministic port buckets.');
 }
 
-afterEach(async () => {
-  await Promise.all(
-    servers
-      .splice(0)
-      .map(
-        (server) =>
-          new Promise((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve()))
-          )
-      )
-  );
-  await Promise.all(
-    children.splice(0).map(async (child) => {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
-      if (child.exitCode === null && child.signalCode === null) await once(child, 'exit');
-    })
-  );
+afterEach(
+  async () => {
+    await Promise.all(
+      servers
+        .splice(0)
+        .map(
+          (server) =>
+            new Promise((resolve, reject) =>
+              server.close((error) => (error ? reject(error) : resolve()))
+            )
+        )
+    );
+    await Promise.all(
+      children.splice(0).map(async (child) => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+        await observations.get(child).waitForExit();
+      })
+    );
+  },
+  process.platform === 'win32' ? 10_000 : 5_000
+);
+
+describe('Harness process observation', () => {
+  function childFixture() {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    return child;
+  }
+
+  it('retains readiness and exit when a fixture finishes before the next await', async () => {
+    const child = childFixture();
+    const observation = observeHarnessChild(child);
+    child.stdout.write('fixture-ready');
+    child.emit('exit', 23, null);
+    child.stderr.write('final diagnostic');
+    child.emit('close', 23, null);
+
+    const output = await observation.waitForOutput('fixture-ready');
+    expect(output()).toBe('fixture-ready');
+    expect(await observation.waitForExit()).toEqual([23, null]);
+    expect(observation.stderr()).toBe('final diagnostic');
+  });
+
+  it('reports stdout, stderr and exit status when readiness is missing', async () => {
+    const child = childFixture();
+    const observation = observeHarnessChild(child);
+    child.stdout.write('partial startup');
+    child.stderr.write('native supervisor failed');
+    child.emit('exit', 91, null);
+    child.emit('close', 91, null);
+
+    await expect(observation.waitForOutput('fixture-ready')).rejects.toThrow(
+      'Harness exited before fixture-ready (code 91, signal null): stdout: partial startup\nstderr: native supervisor failed'
+    );
+  });
+
+  it('keeps a finite readiness budget and does not accept stderr as readiness', async () => {
+    const child = childFixture();
+    const observation = observeHarnessChild(child);
+    child.stderr.write('fixture-ready');
+
+    await expect(observation.waitForOutput('fixture-ready', 10)).rejects.toThrow(
+      'Timed out waiting for fixture-ready: stdout: \nstderr: fixture-ready'
+    );
+  });
+
+  it('surfaces a cached spawn error instead of hanging on readiness or exit', async () => {
+    const child = childFixture();
+    const observation = observeHarnessChild(child);
+    const error = Object.assign(new Error('missing supervisor'), { code: 'ENOENT' });
+    child.emit('error', error);
+
+    await expect(observation.waitForOutput('ready')).rejects.toBe(error);
+    await expect(observation.waitForExit()).rejects.toBe(error);
+  });
 });
 
 describe('Playwright harness ports', () => {
@@ -345,36 +464,46 @@ describe('Playwright harness ports', () => {
     concurrentIdentityTimeoutMs
   );
 
-  it('terminates the harness process tree and releases its grandchild port', async () => {
-    const port = await reservePort();
-    const { child, output } = await startHarness(port, 'unused', processTreeFixture);
-    const pid = grandchildPid(output);
-    const exit = once(child, 'exit');
-    child.kill('SIGTERM');
-    const [, signal] = await exit;
+  it.each(['SIGTERM', 'SIGINT'])(
+    'terminates the harness process tree with %s and releases its grandchild port',
+    async (requestedSignal) => {
+      const port = await reservePort();
+      const { child, output, waitForExit } = await startHarness(port, 'unused', processTreeFixture);
+      const pid = grandchildPid(output);
+      child.kill(requestedSignal);
+      const [, signal] = await waitForExit();
 
-    expect(signal).toBe('SIGTERM');
-    expectProcessGone(pid);
-    await expectPortReusable(port);
-  });
+      expect(signal).toBe(requestedSignal);
+      // Windows kills the wrapper unconditionally; its Job Object watcher
+      // handles descendants. On POSIX, prove actual signal forwarding too.
+      if (process.platform !== 'win32')
+        expect(output()).toContain(`fixture-child-${requestedSignal.toLowerCase()}`);
+      await waitForProcessGone(pid);
+      expectProcessGone(pid);
+      await expectPortReusable(port);
+    },
+    harnessLifecycleTimeoutMs
+  );
 
   it.each([0, 23])(
     'forces cleanup of a stubborn grandchild after direct-child exit code %i',
     async (expectedCode) => {
       const port = await reservePort();
-      const { child, output } = await startHarness(
+      const { output, waitForExit } = await startHarness(
         port,
         'unused',
         exitingProcessTreeFixture(stubbornGrandchildFixture, expectedCode)
       );
       const pid = grandchildPid(output);
-      const [code, signal] = await once(child, 'exit');
+      const [code, signal] = await waitForExit();
 
       expect(code).toBe(expectedCode);
       expect(signal).toBeNull();
+      await waitForProcessGone(pid);
       expectProcessGone(pid);
       await expectPortReusable(port);
-    }
+    },
+    harnessLifecycleTimeoutMs
   );
 
   it('only ignores an absent POSIX process group and surfaces termination failures', async () => {
@@ -445,6 +574,13 @@ describe('Playwright harness ports', () => {
     }
     expect(windowsJob).toContain('JobObjectLimitKillOnJobClose');
     expect(windowsJob).toContain('CreateSuspended');
+    expect(windowsJob).toContain('startupInfo.dwFlags = StartfUseStdHandles');
+    expect(windowsJob).toContain('startupInfo.hStdInput = input');
+    expect(windowsJob).toContain('startupInfo.hStdOutput = output');
+    expect(windowsJob).toContain('startupInfo.hStdError = error');
+    expect(windowsJob).toContain(
+      'DuplicateHandle(current, source, current, out duplicate, 0, true'
+    );
     expect(windowsJob.indexOf('Require(AssignProcessToJobObject')).toBeLessThan(
       windowsJob.indexOf('if (ResumeThread')
     );
@@ -461,11 +597,14 @@ const describePosix = process.platform === 'win32' ? describe.skip : describe;
 describePosix('POSIX harness supervisor', () => {
   it('uses parent-death cleanup to force a silent stubborn descendant after wrapper SIGKILL', async () => {
     const port = await reservePort();
-    const { child, output } = await startHarness(port, 'unused', stubbornProcessTreeFixture);
+    const { child, output, waitForExit } = await startHarness(
+      port,
+      'unused',
+      stubbornProcessTreeFixture
+    );
     const pid = grandchildPid(output);
-    const exit = once(child, 'exit');
     child.kill('SIGKILL');
-    const [, signal] = await exit;
+    const [, signal] = await waitForExit();
 
     expect(signal).toBe('SIGKILL');
     await waitForProcessGone(pid);
@@ -486,35 +625,51 @@ describeWindows('Windows harness supervisor', () => {
         'spaces stay intact',
         'embedded"quote',
         'trailing\\',
+        'spaces with trailing\\',
+        'slashes\\before"quote',
+        'unicode-π',
         ''
       ];
-      const { child, output } = await startHarnessWithArguments(
+      const { output, stderr, waitForExit } = await startHarnessWithArguments(
         port,
         windowsSupervisorFixture(commandArguments, expectedCode),
         commandArguments
       );
-      const [code, signal] = await once(child, 'exit');
+      const pid = grandchildPid(output);
+      const [code, signal] = await waitForExit();
 
       expect(output()).toContain('argument-fidelity-ok');
+      expect(stderr()).toContain('argument-fidelity-stderr');
       expect(code).toBe(expectedCode);
       expect(signal).toBeNull();
+      await waitForProcessGone(pid);
+      expectProcessGone(pid);
       await expectPortReusable(port);
-    }
+    },
+    harnessLifecycleTimeoutMs
   );
 
-  it('kills the Job Object descendants when the wrapper dies abruptly', async () => {
-    const port = await reservePort();
-    const commandArguments = [String(port), 'wrapper-death'];
-    const { child, output } = await startHarnessWithArguments(
-      port,
-      windowsSupervisorFixture(commandArguments),
-      commandArguments
-    );
-    const exit = once(child, 'exit');
-    child.kill('SIGTERM');
-    await exit;
+  it(
+    'kills the Job Object descendants when the wrapper dies abruptly',
+    async () => {
+      const port = await reservePort();
+      const commandArguments = [String(port), 'wrapper-death'];
+      const { child, output, stderr, waitForExit } = await startHarnessWithArguments(
+        port,
+        windowsSupervisorFixture(commandArguments),
+        commandArguments
+      );
+      const pid = grandchildPid(output);
+      child.kill('SIGTERM');
+      const [, signal] = await waitForExit();
 
-    expect(output()).toContain('argument-fidelity-ok');
-    await expectPortReusable(port);
-  });
+      expect(signal).toBe('SIGTERM');
+      expect(output()).toContain('argument-fidelity-ok');
+      expect(stderr()).toContain('argument-fidelity-stderr');
+      await waitForProcessGone(pid);
+      expectProcessGone(pid);
+      await expectPortReusable(port);
+    },
+    harnessLifecycleTimeoutMs
+  );
 });
