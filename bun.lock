@@ -154,6 +154,8 @@
     "electron",
   ],
   "patchedDependencies": {
+    "braces@3.0.3": "patches/braces@3.0.3.patch",
+    "http-cache-semantics@4.2.0": "patches/http-cache-semantics@4.2.0.patch",
     "brace-expansion@5.0.12": "patches/brace-expansion@5.0.12.patch",
   },
   "overrides": {
