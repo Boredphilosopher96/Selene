@@ -847,8 +847,29 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         .frameLocator('iframe[title="Generated React preview frame"]')
         .getByRole('heading', { name: 'Dashboard' })
     ).toBeVisible({ timeout: 15_000 });
-    const activePositionBefore = await activeArtboard.getAttribute('style');
-    const ordersPositionBefore = await ordersArtboard.getAttribute('style');
+    const readArtboardGeometry = (artboard: Locator) =>
+      artboard.evaluate((node) => {
+        const style = (node as HTMLElement).style;
+        // React Flow's focus/selection elevation is transient UI state. The
+        // host persists positions and authored dimensions, not selected z-index.
+        return {
+          position: style.position,
+          transform: style.transform,
+          width: style.width,
+          height: style.height
+        };
+      });
+    const readSavedScreenPositions = () =>
+      window.evaluate(async () => {
+        const graph = (await window.selene.designer.snapshot()).editablePrototype.graph;
+        const dashboard = graph.nodes.find((node) => node.id === 'dashboard')?.position;
+        const orders = graph.nodes.find((node) => node.id === 'orders')?.position;
+        if (!dashboard || !orders) throw new Error('Authored screen positions are unavailable.');
+        return { dashboard, orders };
+      });
+    const activePositionBefore = await readArtboardGeometry(activeArtboard);
+    const ordersPositionBefore = await readArtboardGeometry(ordersArtboard);
+    const savedPositionsBefore = await readSavedScreenPositions();
     const activeDragEvidence = await dragArtboard(
       window,
       activeArtboard,
@@ -856,8 +877,11 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       testInfo
     );
     await expect
-      .poll(() => activeArtboard.getAttribute('style'), { message: activeDragEvidence })
-      .not.toBe(activePositionBefore);
+      .poll(() => readArtboardGeometry(activeArtboard), { message: activeDragEvidence })
+      .not.toEqual(activePositionBefore);
+    await expect
+      .poll(async () => (await readSavedScreenPositions()).dashboard)
+      .not.toEqual(savedPositionsBefore.dashboard);
     const ordersDragEvidence = await dragArtboard(
       window,
       ordersArtboard,
@@ -865,13 +889,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       testInfo
     );
     await expect
-      .poll(() => ordersArtboard.getAttribute('style'), { message: ordersDragEvidence })
-      .not.toBe(ordersPositionBefore);
+      .poll(() => readArtboardGeometry(ordersArtboard), { message: ordersDragEvidence })
+      .not.toEqual(ordersPositionBefore);
+    await expect
+      .poll(async () => (await readSavedScreenPositions()).orders)
+      .not.toEqual(savedPositionsBefore.orders);
     await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
       /Saved graph revision \d+\./
     );
-    const persistedActivePosition = await activeArtboard.getAttribute('style');
-    const persistedOrdersPosition = await ordersArtboard.getAttribute('style');
+    const persistedActivePosition = await readArtboardGeometry(activeArtboard);
+    const persistedOrdersPosition = await readArtboardGeometry(ordersArtboard);
+    const persistedScreenPositions = await readSavedScreenPositions();
 
     await window.reload();
     const reloadedCanvas = window.getByLabel('Design canvas');
@@ -879,14 +907,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(reloadedCanvas.getByLabel('Compiled React artboard')).toBeVisible({
       timeout: 5_000
     });
-    await expect(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]')).toHaveAttribute(
-      'style',
-      persistedActivePosition ?? ''
-    );
-    await expect(reloadedCanvas.locator('.react-flow__node[data-id="orders"]')).toHaveAttribute(
-      'style',
-      persistedOrdersPosition ?? ''
-    );
+    await expect
+      .poll(() =>
+        readArtboardGeometry(reloadedCanvas.locator('.react-flow__node[data-id="dashboard"]'))
+      )
+      .toEqual(persistedActivePosition);
+    await expect
+      .poll(() =>
+        readArtboardGeometry(reloadedCanvas.locator('.react-flow__node[data-id="orders"]'))
+      )
+      .toEqual(persistedOrdersPosition);
+    await expect.poll(readSavedScreenPositions).toEqual(persistedScreenPositions);
 
     await expect(canvas).toHaveAttribute('data-mode', 'design');
     await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
