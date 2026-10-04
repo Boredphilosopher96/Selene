@@ -10,6 +10,27 @@ export interface ProjectRevisionSnapshot extends RevisionSnapshot {
   };
 }
 
+/** Check intent inside the host queue: Escape can run while a refresh is waiting. */
+export async function retargetPreviewSelection<
+  Snapshot extends RevisionSnapshot & { readonly selectedNodeId?: string }
+>(input: {
+  readonly snapshot: Snapshot;
+  readonly revisionId: string;
+  readonly isCurrent: () => boolean;
+  readonly enqueue: (operation: () => Promise<Snapshot>) => Promise<Snapshot>;
+  readonly readSnapshot: () => Promise<Snapshot>;
+  readonly selectNode: (nodeId: string) => Promise<Snapshot>;
+}): Promise<Snapshot> {
+  const selectedNodeId = input.snapshot.selectedNodeId;
+  if (selectedNodeId === undefined) return input.snapshot;
+  const next = await input.enqueue(() =>
+    input.isCurrent() ? input.selectNode(selectedNodeId) : input.readSnapshot()
+  );
+  if (next.source.revision.id !== input.revisionId)
+    throw new Error(`Host selection belongs to ${next.source.revision.id}`);
+  return next;
+}
+
 export interface RevisionPreviewBuild {
   readonly revisionId: string;
 }

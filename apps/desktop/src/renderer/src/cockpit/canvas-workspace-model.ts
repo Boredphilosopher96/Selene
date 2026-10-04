@@ -125,12 +125,34 @@ export interface CanvasGraphEdge {
   readonly selected?: boolean;
 }
 
+export interface CanvasConnectionSelectionObservation {
+  readonly projectFence: string;
+  readonly selectedEdgeId: string;
+  readonly signature: string;
+}
+
+/** Initial selection belongs to React Flow; only refresh surviving selection semantics. */
+export function canvasConnectionSelectionChanged(
+  previous: CanvasConnectionSelectionObservation | undefined,
+  next: CanvasConnectionSelectionObservation
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.projectFence === next.projectFence &&
+    previous.selectedEdgeId === next.selectedEdgeId &&
+    previous.signature !== next.signature
+  );
+}
+
 /** Keeps host-authoritative edge topology while retaining local focus state. */
 export function projectGraphEdges<TEdge extends CanvasGraphEdge>(
   graphEdges: readonly TEdge[],
   current: readonly TEdge[],
-  changes: readonly Readonly<{ type: string; id?: string; selected?: boolean }>[]
+  changes: readonly Readonly<{ type: string; id?: string; selected?: boolean }>[],
+  selectionScope?: Readonly<{ currentFence: string; graphFence: string }>
 ): TEdge[] {
+  const retainSelection =
+    selectionScope === undefined || selectionScope.currentFence === selectionScope.graphFence;
   const selectedById = new Map<string, boolean>();
   for (const change of changes) {
     if (
@@ -143,7 +165,9 @@ export function projectGraphEdges<TEdge extends CanvasGraphEdge>(
   return graphEdges.map((edge) => {
     const selected = selectedById.get(edge.id);
     if (selected !== undefined) return { ...edge, selected } as TEdge;
-    const existing = current.find((candidate) => candidate.id === edge.id);
+    const existing = retainSelection
+      ? current.find((candidate) => candidate.id === edge.id)
+      : undefined;
     return existing?.selected === true ? ({ ...edge, selected: true } as TEdge) : edge;
   });
 }

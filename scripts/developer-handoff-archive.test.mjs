@@ -106,7 +106,7 @@ describe('developer handoff archive', () => {
     expect(files.get('package.json')).not.toContain('workspace:');
     expect(files.get('bun.lock')).not.toContain('@selene/');
     expect(files.get('bun.lock')).toContain('"patchedDependencies"');
-    expect(files.get('patches/brace-expansion@5.0.8.patch')).toContain(
+    expect(files.get('patches/brace-expansion@5.0.12.patch')).toContain(
       'module.exports = callableExpand'
     );
     expect(files.get('src/orders-review-r18.tsx')).toContain('OrdersReviewRow');
@@ -137,7 +137,7 @@ describe('developer handoff archive', () => {
       expect.arrayContaining([
         expect.objectContaining({ path: 'package.json' }),
         expect.objectContaining({ path: 'bun.lock' }),
-        expect.objectContaining({ path: 'patches/brace-expansion@5.0.8.patch' }),
+        expect.objectContaining({ path: 'patches/brace-expansion@5.0.12.patch' }),
         expect.objectContaining({ path: 'inspection/orders-review-r18.inspection.json' }),
         expect.objectContaining({ path: 'src/orders-review-r18.stories.tsx' }),
         expect.objectContaining({ path: 'src/assets/selene-crescent.svg' })

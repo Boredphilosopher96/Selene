@@ -128,6 +128,8 @@ export interface HostedReviewProviderPort {
     operation: HostedReviewOperation,
     context?: CollaborationHostContext
   ): Promise<HostedReviewOperationResult>;
+  /** Optional invalidation stream. Notifications carry no state; clients re-list authoritatively. */
+  subscribe?(binding: HostedReviewBinding, onChange: () => void, onError?: () => void): () => void;
 }
 
 const maxIdentifier = 128;

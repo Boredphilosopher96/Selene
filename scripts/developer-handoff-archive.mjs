@@ -14,7 +14,7 @@ export const HANDOFF_SOURCE_REVISION = 'orders-r18-7f3a';
 export const HANDOFF_BASELINE_REVISION = 'orders-r17-b9c1';
 const HANDOFF_PACKAGE_SOURCE = 'scripts/fixtures/developer-handoff/package.json';
 const HANDOFF_LOCK_SOURCE = 'scripts/fixtures/developer-handoff/bun.lock';
-const HANDOFF_PATCH_SOURCE = 'patches/brace-expansion@5.0.8.patch';
+const HANDOFF_PATCH_SOURCE = 'patches/brace-expansion@5.0.12.patch';
 const INSPECTION_MANIFEST_SOURCE = 'apps/web/src/orders-review-inspection-manifest.json';
 const INSPECTION_MANIFEST_ARCHIVE_PATH = 'inspection/orders-review-r18.inspection.json';
 const INSPECTION_MANIFEST_DIGEST =
@@ -451,15 +451,15 @@ function handoffPackage() {
       vite: '8.1.5'
     },
     overrides: {
-      '@vitest/expect': '4.1.10',
-      '@vitest/pretty-format': '4.1.10',
-      '@vitest/spy': '4.1.10',
-      '@vitest/utils': '4.1.10',
-      'brace-expansion': '5.0.8',
+      '@vitest/expect': '4.1.11',
+      '@vitest/pretty-format': '4.1.11',
+      '@vitest/spy': '4.1.11',
+      '@vitest/utils': '4.1.11',
+      'brace-expansion': '5.0.12',
       vite: '8.1.5'
     },
     patchedDependencies: {
-      'brace-expansion@5.0.8': 'patches/brace-expansion@5.0.8.patch'
+      'brace-expansion@5.0.12': 'patches/brace-expansion@5.0.12.patch'
     }
   };
 }
@@ -636,7 +636,7 @@ const filesFor = (rootLock, packageText, standaloneLock, patchText, inspectionTe
   return new Map([
     ['package.json', packageText],
     ['bun.lock', consumerLock(standaloneLock, rootLock, packageJson)],
-    ['patches/brace-expansion@5.0.8.patch', patchText],
+    ['patches/brace-expansion@5.0.12.patch', patchText],
     [
       'tsconfig.json',
       `${canonicalJson({ compilerOptions: { jsx: 'react-jsx', module: 'ESNext', moduleResolution: 'Bundler', strict: true, noEmit: true, target: 'ES2022', lib: ['ES2022', 'DOM', 'DOM.Iterable'], skipLibCheck: true }, include: ['src', '.storybook'] })}\n`

@@ -15,6 +15,10 @@ import type { IdentityProvider } from './auth.js';
 import { createHeaderIdentityProvider, createNoLoginIdentityProvider } from './auth.js';
 import type { ServiceEnvironment } from './env.js';
 import type { OidcBffHttpHandler } from './oidc-bff.js';
+import {
+  createProjectBackupHttpHandler,
+  type ProjectBackupStore
+} from './project-backup-service.js';
 import { createHostEffectContextFactory } from './host-effects.js';
 
 export interface Readiness {
@@ -59,7 +63,8 @@ export function createCollaborationApplication(
     ? createNoLoginIdentityProvider(environment.localUserId)
     : createHeaderIdentityProvider(environment.proxySecret),
   oidcBff?: OidcBffHttpHandler,
-  hostedReviewBindings?: HostedReviewBindingResolver
+  hostedReviewBindings?: HostedReviewBindingResolver,
+  projectBackupStore?: ProjectBackupStore
 ): CollaborationApplication {
   const configuredHostedReviewBindings =
     hostedReviewBindings ??
@@ -93,6 +98,16 @@ export function createCollaborationApplication(
       ? {}
       : { hostedReviewBindings: configuredHostedReviewBindings })
   });
+  const recovery =
+    projectBackupStore === undefined
+      ? undefined
+      : createProjectBackupHttpHandler({
+          store: projectBackupStore,
+          authorizer,
+          identityProvider,
+          hostContextFactory: createHostEffectContextFactory(),
+          allowedOrigins: environment.corsOrigins
+        });
   return {
     ready: () => readiness.ready(),
     async fetch(request) {
@@ -131,6 +146,8 @@ export function createCollaborationApplication(
           return withRequestId(Response.json({ status: 'not_ready' }, { status: 503 }), requestId);
         }
       }
+      const recoveryResponse = await recovery?.fetch(request);
+      if (recoveryResponse !== undefined) return withRequestId(recoveryResponse, requestId);
       const identity = await identityProvider.authenticate(request);
       const headers = new Headers(request.headers);
       headers.delete('x-selene-user-id');

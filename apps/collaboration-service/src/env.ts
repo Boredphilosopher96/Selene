@@ -2,6 +2,7 @@ import {
   validateHostedOidcProviderConfig,
   type HostedOidcProviderConfig
 } from '@selene/identity-runtime';
+import { PROJECT_BACKUP_LIMITS } from './project-backup-contract';
 
 interface ServiceEnvironmentBase {
   readonly host: string;
@@ -80,7 +81,11 @@ export function readServiceEnvironment(
     localUserId: values.COLLABORATION_LOCAL_USER_ID ?? 'local-user',
     ...(oidc ? { oidc } : {}),
     ...(hostedReview ? { hostedReview } : {}),
-    bodyLimitBytes: integer(values.MAX_BODY_BYTES, 'MAX_BODY_BYTES', 1_048_576),
+    bodyLimitBytes: integer(
+      values.MAX_BODY_BYTES,
+      'MAX_BODY_BYTES',
+      PROJECT_BACKUP_LIMITS.bytes + 4096
+    ),
     rateLimitPerMinute: integer(values.RATE_LIMIT_PER_MINUTE, 'RATE_LIMIT_PER_MINUTE', 120)
   };
   if (store === 'postgres') {

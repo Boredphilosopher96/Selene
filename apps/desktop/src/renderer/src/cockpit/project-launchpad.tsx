@@ -3,6 +3,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Popover } from '@selene/ui/workspace';
 
 import type { ProjectOpenResult, RecentProject } from '../../../shared/designer-api';
+import { StudioIcon } from './studio-icon';
+import './studio-polish.css';
 
 type ProjectTemplate = 'blank' | 'dashboard' | 'review';
 
@@ -241,6 +243,13 @@ export function ProjectLaunchpad({
       <p aria-atomic="true" className="sl-field__help" role="status">
         {checkingRecovery ? 'Verifying safe preview startup…' : status}
       </p>
+      {recentState === 'loading' ? (
+        <div className="project-launchpad__loading" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      ) : null}
       {recentState === 'error' ? (
         <button
           className="sl-button sl-button--secondary"
@@ -291,12 +300,20 @@ export function ProjectLaunchpad({
           {visible.map((project) => (
             <li key={project.id}>
               <button
-                className="sl-list-row sl-popover__trigger"
+                className="sl-list-row sl-popover__trigger project-launchpad__project"
+                aria-label={busy === project.id ? `Opening ${project.name}…` : project.name}
                 type="button"
                 disabled={projectActionsBlocked}
                 onClick={() => void openProject(project)}
               >
-                {busy === project.id ? `Opening ${project.name}…` : project.name}
+                <span className="project-launchpad__project-icon">
+                  <StudioIcon name="folder" />
+                </span>
+                <span className="project-launchpad__project-copy">
+                  <strong>{busy === project.id ? `Opening ${project.name}…` : project.name}</strong>
+                  <small>Local workspace</small>
+                </span>
+                <StudioIcon name="arrow" className="project-launchpad__project-arrow" />
               </button>
             </li>
           ))}
@@ -307,11 +324,15 @@ export function ProjectLaunchpad({
       recovery?.active === false &&
       !checkingRecovery &&
       !recoveryError ? (
-        <p className="project-launchpad__empty">
-          {mode === 'first-run'
-            ? 'No local projects yet. Start with a new project.'
-            : 'No recent projects yet.'}
-        </p>
+        <div className="project-launchpad__empty">
+          <StudioIcon name="folder" />
+          <strong>Your next idea starts here</strong>
+          <p>
+            {mode === 'first-run'
+              ? 'No local projects yet. Start with a new project.'
+              : 'No recent projects yet.'}
+          </p>
+        </div>
       ) : null}
       {projects.length > 0 && visible.length === 0 ? (
         <p className="project-launchpad__empty">No recent projects match this search.</p>
@@ -322,15 +343,61 @@ export function ProjectLaunchpad({
     <section
       aria-label={mode === 'first-run' ? 'Selene project launchpad' : 'Recent projects'}
       className={`sl-field project-launchpad project-launchpad--${mode}${mode === 'first-run' ? ' sl-card' : ''}`}
+      aria-busy={busy !== undefined || undefined}
     >
       {mode === 'first-run' ? (
         <header className="project-launchpad__hero">
-          <span aria-hidden="true" className="sl-status-badge sl-status-badge--neutral">
-            S
-          </span>
-          <p className="sl-field__label">Selene desktop designer</p>
-          <h1>Start a local project</h1>
-          <p>{startupMessage}</p>
+          <div className="project-launchpad__intro">
+            <div className="project-launchpad__brand">
+              <span aria-hidden="true" className="brand-mark">
+                S
+              </span>
+              <span>
+                Selene <small>DESIGN STUDIO</small>
+              </span>
+            </div>
+            <p className="project-launchpad__eyebrow">From intent to interface</p>
+            <h1>Start a local project</h1>
+            <p className="project-launchpad__subtitle">
+              Shape the experience. Explore every flow. Hand off real React.
+            </p>
+            <p className="project-launchpad__startup">{startupMessage}</p>
+            <ul className="project-launchpad__principles" aria-label="Workspace principles">
+              <li>
+                <StudioIcon name="shield" /> Local-first
+              </li>
+              <li>
+                <StudioIcon name="canvas" /> React + TypeScript
+              </li>
+              <li>
+                <StudioIcon name="sparkles" /> Your choice of agent
+              </li>
+            </ul>
+          </div>
+          <div className="project-launchpad__artwork" aria-hidden="true">
+            <div className="project-launchpad__artboard">
+              <span className="project-launchpad__artboard-top">
+                <i />
+                <i />
+                <i />
+              </span>
+              <div className="project-launchpad__artboard-content">
+                <span className="project-launchpad__artboard-sidebar" />
+                <div>
+                  <b />
+                  <span />
+                  <span />
+                  <span />
+                  <em />
+                  <em />
+                  <em />
+                </div>
+              </div>
+            </div>
+            <div className="project-launchpad__artwork-note">
+              <StudioIcon name="check" /> Source-backed by design
+            </div>
+          </div>
         </header>
       ) : null}
       {mode === 'first-run' ? (
@@ -364,9 +431,7 @@ export function ProjectLaunchpad({
             </label>
             <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
               <legend>React + TypeScript starter</legend>
-              <p>
-                Choose the host-provided local workspace shape. Packages are not installed here.
-              </p>
+              <p>A source-backed starting point. No packages are installed here.</p>
               <div>
                 {projectTemplates.map((option) => (
                   <label
@@ -380,7 +445,16 @@ export function ProjectLaunchpad({
                       value={option.id}
                       onChange={() => setTemplate(option.id)}
                     />
-                    <span>
+                    <span
+                      className={`project-launchpad__template-preview project-launchpad__template-preview--${option.id}`}
+                      aria-hidden="true"
+                    >
+                      <i />
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span className="project-launchpad__template-copy">
                       <strong>{option.label}</strong>
                       <small>{option.description}</small>
                     </span>

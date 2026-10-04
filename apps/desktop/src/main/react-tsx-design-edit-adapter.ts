@@ -23,11 +23,9 @@ export interface PreparedReactTsxDesignEdit {
     readonly previousContent: string;
     readonly nextContent: string;
     readonly dependency?: string;
-    readonly addedNode?: {
-      readonly nodeId: string;
-      readonly path: string;
-      readonly exportName: string;
-    };
+    readonly addedNodes?: ReactSourceWorkspace['nodes'];
+    /** Stable compiler identities removed with a structural source subtree. */
+    readonly removedNodeIds?: readonly string[];
   };
 }
 
@@ -54,6 +52,8 @@ export type ReactTsxDesignEditPreparation =
         | 'COMPONENT_IMPORT_CONFLICT'
         | 'UNSAFE_CHILD'
         | 'UNSAFE_REPARENT'
+        | 'UNSAFE_DUPLICATE'
+        | 'DUPLICATE_IDENTITY_CONFLICT'
         | 'UNSAFE_PROP'
         | 'UNSUPPORTED_CONTAINER'
         | 'UNSAFE_STYLE'
@@ -190,6 +190,24 @@ function markerCount(root: ts.Node, anchor: string): number {
   };
   visit(root);
   return count;
+}
+
+function markedNodeIds(root: ts.Node): readonly string[] {
+  const ids: string[] = [];
+  const visit = (node: ts.Node): void => {
+    const attributes =
+      ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)
+        ? node.attributes.properties
+        : undefined;
+    for (const attribute of attributes ?? []) {
+      if (!ts.isJsxAttribute(attribute)) continue;
+      const value = markerValue(attribute);
+      if (value !== undefined) ids.push(value);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return Object.freeze([...new Set(ids)].sort());
 }
 
 function escapedJsxText(content: string): string {
@@ -529,7 +547,9 @@ function samePositionTarget(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function directParent(element: ts.JsxElement): ts.JsxElement | undefined {
+function directParent(
+  element: ts.JsxElement | ts.JsxSelfClosingElement
+): ts.JsxElement | undefined {
   return ts.isJsxElement(element.parent) && element.parent.children.includes(element)
     ? element.parent
     : undefined;
@@ -569,6 +589,231 @@ function isSupportedContainer(element: ts.JsxElement): boolean {
     ts.isStringLiteral(display[0].initializer) &&
     (display[0].initializer.text === 'flex' || display[0].initializer.text === 'grid')
   );
+}
+
+export type ReactTsxDuplicateTargetInspection =
+  | {
+      readonly kind: 'supported';
+      readonly parentSourceAnchorId: string;
+      readonly sourceAnchorIds: readonly string[];
+    }
+  | {
+      readonly kind: 'unavailable';
+      readonly code:
+        | 'MISSING_TARGET'
+        | 'AMBIGUOUS_TARGET'
+        | 'UNSUPPORTED_EXPORT'
+        | 'UNSUPPORTED_CONTAINER'
+        | 'UNSAFE_DUPLICATE'
+        | 'SOURCE_BINDING_MISMATCH'
+        | 'INVALID_TSX_SYNTAX';
+    };
+
+const duplicateIdentityAttributes = new Set([
+  'id',
+  'htmlFor',
+  'for',
+  'name',
+  'key',
+  'ref',
+  'form',
+  'list',
+  'headers',
+  'aria-labelledby',
+  'aria-describedby',
+  'aria-controls',
+  'aria-owns',
+  'aria-activedescendant',
+  'aria-details',
+  'aria-errormessage',
+  'dangerouslySetInnerHTML',
+  'srcDoc',
+  'children'
+]);
+
+function staticDuplicateLiteral(node: ts.Expression): boolean {
+  return (
+    ts.isStringLiteral(node) ||
+    ts.isNumericLiteral(node) ||
+    node.kind === ts.SyntaxKind.TrueKeyword ||
+    node.kind === ts.SyntaxKind.FalseKeyword ||
+    node.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isPrefixUnaryExpression(node) &&
+      (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.PlusToken) &&
+      ts.isNumericLiteral(node.operand))
+  );
+}
+
+/** Intrinsic static markup only. Identity references and executable props require a separate rewrite policy. */
+function staticDuplicateSubtree(root: ts.JsxElement | ts.JsxSelfClosingElement): boolean {
+  const opening = ts.isJsxElement(root) ? root.openingElement : root;
+  if (!ts.isIdentifier(opening.tagName) || !/^[a-z][a-z0-9]*$/.test(opening.tagName.text))
+    return false;
+  const seen = new Set<string>();
+  for (const attribute of opening.attributes.properties) {
+    if (!ts.isJsxAttribute(attribute) || !ts.isIdentifier(attribute.name)) return false;
+    const name = attribute.name.text;
+    if (
+      seen.has(name) ||
+      duplicateIdentityAttributes.has(name) ||
+      /^on/i.test(name) ||
+      (name.startsWith('data-selene-') && name !== 'data-selene-node-id')
+    )
+      return false;
+    seen.add(name);
+    if (name === 'data-selene-node-id' && markerValue(attribute) === undefined) return false;
+    const initializer = attribute.initializer;
+    if (initializer === undefined) continue;
+    if (ts.isStringLiteral(initializer)) {
+      if ((name === 'href' || name === 'xlinkHref') && initializer.text.includes('#')) return false;
+      continue;
+    }
+    if (!ts.isJsxExpression(initializer) || initializer.expression === undefined) return false;
+    const expression = initializer.expression;
+    if (name === 'style') {
+      if (
+        !ts.isObjectLiteralExpression(expression) ||
+        !expression.properties.every(
+          (property) =>
+            ts.isPropertyAssignment(property) &&
+            (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+            staticDuplicateLiteral(property.initializer)
+        )
+      )
+        return false;
+    } else if (
+      !staticDuplicateLiteral(expression) ||
+      ((name === 'href' || name === 'xlinkHref') &&
+        ts.isStringLiteral(expression) &&
+        expression.text.includes('#'))
+    )
+      return false;
+  }
+  return (
+    ts.isJsxSelfClosingElement(root) ||
+    root.children.every(
+      (child) =>
+        ts.isJsxText(child) ||
+        (ts.isJsxExpression(child) &&
+          (child.expression === undefined || staticDuplicateLiteral(child.expression))) ||
+        ((ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child)) &&
+          staticDuplicateSubtree(child))
+    )
+  );
+}
+
+function inspectDuplicateElement(
+  workspace: ReactSourceWorkspace,
+  source: ts.SourceFile,
+  scope: ts.FunctionDeclaration,
+  element: ts.JsxElement | ts.JsxSelfClosingElement
+): ReactTsxDuplicateTargetInspection {
+  const parent = directParent(element);
+  if (parent === undefined || !isSupportedContainer(parent))
+    return { kind: 'unavailable', code: 'UNSUPPORTED_CONTAINER' };
+  const parentMarkers = parent.openingElement.attributes.properties.flatMap((attribute) => {
+    const value = ts.isJsxAttribute(attribute) ? markerValue(attribute) : undefined;
+    return value === undefined ? [] : [value];
+  });
+  const parentSourceAnchorId = parentMarkers[0];
+  if (
+    parentMarkers.length !== 1 ||
+    parentSourceAnchorId === undefined ||
+    markerCount(source, parentSourceAnchorId) !== 1
+  )
+    return { kind: 'unavailable', code: 'AMBIGUOUS_TARGET' };
+  if (
+    parent.children.some(
+      (child) =>
+        ts.isJsxFragment(child) ||
+        (ts.isJsxExpression(child) &&
+          child.expression !== undefined &&
+          !staticDuplicateLiteral(child.expression))
+    )
+  )
+    return { kind: 'unavailable', code: 'UNSAFE_DUPLICATE' };
+  for (
+    let ancestor: ts.Node | undefined = parent.parent;
+    ancestor !== undefined && ancestor !== scope;
+    ancestor = ancestor.parent
+  ) {
+    if (!(
+      ts.isJsxElement(ancestor) ||
+      ts.isJsxFragment(ancestor) ||
+      ts.isParenthesizedExpression(ancestor) ||
+      ts.isReturnStatement(ancestor) ||
+      ts.isBlock(ancestor)
+    ))
+      return { kind: 'unavailable', code: 'UNSAFE_DUPLICATE' };
+  }
+  if (!staticDuplicateSubtree(element)) return { kind: 'unavailable', code: 'UNSAFE_DUPLICATE' };
+  const sourceAnchorIds = markedNodeIds(element);
+  if (sourceAnchorIds.length === 0 || sourceAnchorIds.length > 64)
+    return { kind: 'unavailable', code: 'UNSAFE_DUPLICATE' };
+  for (const anchor of [parentSourceAnchorId, ...sourceAnchorIds]) {
+    const nodes = workspace.nodes.filter((node) => node.nodeId === anchor);
+    if (
+      nodes.length !== 1 ||
+      nodes[0]?.path !== source.fileName ||
+      nodes[0]?.exportName !== 'default'
+    )
+      return { kind: 'unavailable', code: 'SOURCE_BINDING_MISMATCH' };
+    const counts = workspace.files
+      .filter((file) => file.language === 'tsx')
+      .map((file) =>
+        markerCount(
+          file.path === source.fileName
+            ? source
+            : ts.createSourceFile(
+                file.path,
+                file.content,
+                ts.ScriptTarget.Latest,
+                true,
+                ts.ScriptKind.TSX
+              ),
+          anchor
+        )
+      );
+    if (counts.reduce((total, count) => total + count, 0) !== 1)
+      return { kind: 'unavailable', code: 'AMBIGUOUS_TARGET' };
+  }
+  return { kind: 'supported', parentSourceAnchorId, sourceAnchorIds };
+}
+
+/** Eligibility inventory only. Applying still requires immutable compiler/revision authority and fresh host identities. */
+export function inspectReactTsxDuplicateTarget(
+  workspace: ReactSourceWorkspace,
+  sourceAnchorId: string
+): ReactTsxDuplicateTargetInspection {
+  const nodes = workspace.nodes.filter((node) => node.nodeId === sourceAnchorId);
+  if (nodes.length === 0) return { kind: 'unavailable', code: 'MISSING_TARGET' };
+  if (nodes.length !== 1) return { kind: 'unavailable', code: 'AMBIGUOUS_TARGET' };
+  const files = workspace.files.filter(
+    (file) => file.path === nodes[0]?.path && file.language === 'tsx'
+  );
+  if (files.length !== 1) return { kind: 'unavailable', code: 'MISSING_TARGET' };
+  const file = files[0];
+  if (file === undefined) return { kind: 'unavailable', code: 'MISSING_TARGET' };
+  const source = ts.createSourceFile(
+    file.path,
+    file.content,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX
+  );
+  if (hasDiagnostic(source)) return { kind: 'unavailable', code: 'INVALID_TSX_SYNTAX' };
+  const scope = defaultExportScope(source);
+  if (nodes[0]?.exportName !== 'default' || scope === undefined)
+    return { kind: 'unavailable', code: 'UNSUPPORTED_EXPORT' };
+  const elements = matchingReplaceableElements(scope, sourceAnchorId);
+  if (elements.length !== 1)
+    return {
+      kind: 'unavailable',
+      code: elements.length === 0 ? 'MISSING_TARGET' : 'AMBIGUOUS_TARGET'
+    };
+  const element = elements[0];
+  if (element === undefined) return { kind: 'unavailable', code: 'MISSING_TARGET' };
+  return inspectDuplicateElement(workspace, source, scope, element);
 }
 
 function componentModuleSpecifier(component: ApprovedDesignSystemComponent): string {
@@ -823,6 +1068,84 @@ export function prepareReactTsxDesignEdit(
   if (staleResult !== undefined) return staleResult;
   if (proposal.base.projectId !== context.workspace.projectId)
     return { kind: 'conflict', code: 'PROJECT_MISMATCH' };
+  if (
+    proposal.commands.length > 1 &&
+    proposal.commands.every((command) => command.kind === 'duplicate-node')
+  ) {
+    const parentSourceAnchorId = proposal.commands[0]?.target.parentSourceAnchorId;
+    const originals = proposal.commands.flatMap((command) =>
+      command.sourceAnchorRemaps.map((entry) => entry.fromSourceAnchorId)
+    );
+    if (
+      parentSourceAnchorId === undefined ||
+      proposal.commands.some(
+        (command) => command.target.parentSourceAnchorId !== parentSourceAnchorId
+      ) ||
+      originals.length > 64 ||
+      new Set(originals).size !== originals.length
+    )
+      return { kind: 'rejected', code: 'UNSAFE_DUPLICATE' };
+    const patches: PreparedReactTsxDesignEdit['patch'][] = [];
+    for (const command of proposal.commands) {
+      // Every target is checked against the original workspace and compiler tuple.
+      // No intermediate candidate can supply authority for a later target.
+      const prepared = prepareReactTsxDesignEdit({ ...proposal, commands: [command] }, context);
+      if (prepared.kind !== 'prepared') return prepared;
+      patches.push(prepared.patch);
+    }
+    const first = patches[0];
+    if (
+      first === undefined ||
+      patches.some(
+        (patch) => patch.path !== first.path || patch.previousContent !== first.previousContent
+      )
+    )
+      return { kind: 'rejected', code: 'UNSUPPORTED_CONTAINER' };
+    const source = ts.createSourceFile(
+      first.path,
+      first.previousContent,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    const scope = defaultExportScope(source);
+    if (scope === undefined) return { kind: 'rejected', code: 'UNSUPPORTED_EXPORT' };
+    const insertions: Array<{ readonly offset: number; readonly content: string }> = [];
+    for (let index = 0; index < proposal.commands.length; index += 1) {
+      const command = proposal.commands[index];
+      const patch = patches[index];
+      if (command === undefined || patch === undefined)
+        return { kind: 'rejected', code: 'UNSUPPORTED_COMMAND' };
+      const element = matchingReplaceableElements(scope, command.target.sourceAnchorId)[0];
+      if (element === undefined) return { kind: 'rejected', code: 'MISSING_TARGET' };
+      const length = patch.nextContent.length - patch.previousContent.length;
+      insertions.push({
+        offset: element.end,
+        content: patch.nextContent.slice(element.end, element.end + length)
+      });
+    }
+    let nextContent = first.previousContent;
+    for (const insertion of insertions.sort((left, right) => right.offset - left.offset))
+      nextContent = `${nextContent.slice(0, insertion.offset)}${insertion.content}${nextContent.slice(insertion.offset)}`;
+    const reparsed = ts.createSourceFile(
+      first.path,
+      nextContent,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: first.path,
+        previousContent: first.previousContent,
+        nextContent,
+        addedNodes: patches.flatMap((patch) => patch.addedNodes ?? [])
+      }
+    };
+  }
   const command = proposal.commands[0];
   const positionCommands = proposal.commands.filter(
     (
@@ -853,6 +1176,8 @@ export function prepareReactTsxDesignEdit(
       command.kind !== 'set-style' &&
       command.kind !== 'replace-component' &&
       command.kind !== 'insert-child' &&
+      command.kind !== 'remove-node' &&
+      command.kind !== 'duplicate-node' &&
       command.kind !== 'reorder-child' &&
       command.kind !== 'reparent-child')
   )
@@ -961,6 +1286,141 @@ export function prepareReactTsxDesignEdit(
       }
     };
   }
+  if (command.kind === 'duplicate-node') {
+    const elements = matchingReplaceableElements(scope, command.target.sourceAnchorId);
+    const element = elements[0];
+    if (element === undefined) return { kind: 'rejected', code: 'MISSING_TARGET' };
+    if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    const inspection = inspectDuplicateElement(context.workspace, source, scope, element);
+    if (inspection.kind !== 'supported') return { kind: 'rejected', code: inspection.code };
+    if (
+      inspection.parentSourceAnchorId !== command.target.parentSourceAnchorId ||
+      command.target.operation.node.instance.repeat.kind !== 'singleton'
+    )
+      return { kind: 'rejected', code: 'UNSAFE_DUPLICATE' };
+    const remaps = new Map(
+      command.sourceAnchorRemaps.map((entry) => [entry.fromSourceAnchorId, entry.toSourceAnchorId])
+    );
+    if (
+      remaps.size !== inspection.sourceAnchorIds.length ||
+      inspection.sourceAnchorIds.some((anchor) => !remaps.has(anchor))
+    )
+      return { kind: 'rejected', code: 'SOURCE_BINDING_MISMATCH' };
+    for (const anchor of [inspection.parentSourceAnchorId, ...inspection.sourceAnchorIds]) {
+      const bindings = context.sourceBindings.filter(
+        (binding) => binding.sourceAnchorId === anchor
+      );
+      if (
+        bindings.length !== 1 ||
+        bindings[0]?.path !== file.path ||
+        bindings[0]?.exportName !== 'default' ||
+        bindings[0]?.moduleId !== hostBinding.moduleId ||
+        bindings[0]?.sourceDigest !== context.sourceDigest ||
+        bindings[0]?.bindingDigest !== context.bindingDigest
+      )
+        return { kind: 'rejected', code: 'SOURCE_BINDING_MISMATCH' };
+    }
+    const parsedFiles = context.workspace.files
+      .filter((candidate) => candidate.language === 'tsx')
+      .map((candidate) =>
+        candidate.path === file.path
+          ? source
+          : ts.createSourceFile(
+              candidate.path,
+              candidate.content,
+              ts.ScriptTarget.Latest,
+              true,
+              ts.ScriptKind.TSX
+            )
+      );
+    for (const anchor of remaps.values()) {
+      if (
+        context.workspace.nodes.some((node) => node.nodeId === anchor) ||
+        parsedFiles.some((parsed) => markerCount(parsed, anchor) !== 0)
+      )
+        return { kind: 'rejected', code: 'DUPLICATE_IDENTITY_CONFLICT' };
+    }
+    const replacements: Array<{
+      readonly start: number;
+      readonly end: number;
+      readonly value: string;
+    }> = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxAttribute(node)) {
+        const oldAnchor = markerValue(node);
+        const newAnchor = oldAnchor === undefined ? undefined : remaps.get(oldAnchor);
+        const initializer = node.initializer;
+        if (newAnchor !== undefined && initializer !== undefined) {
+          const literal = ts.isJsxExpression(initializer) ? initializer.expression : initializer;
+          if (literal !== undefined)
+            replacements.push({
+              start: literal.getStart(source),
+              end: literal.end,
+              value: JSON.stringify(newAnchor)
+            });
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(element);
+    const start = element.getStart(source);
+    let duplicate = file.content.slice(start, element.end);
+    for (const replacement of replacements.sort((left, right) => right.start - left.start))
+      duplicate = `${duplicate.slice(0, replacement.start - start)}${replacement.value}${duplicate.slice(replacement.end - start)}`;
+    const nextContent = `${file.content.slice(0, element.end)}${duplicate}${file.content.slice(element.end)}`;
+    const reparsed = ts.createSourceFile(
+      file.path,
+      nextContent,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: file.path,
+        previousContent: file.content,
+        nextContent,
+        addedNodes: command.sourceAnchorRemaps.map((remap) => ({
+          nodeId: remap.toSourceAnchorId,
+          path: file.path,
+          exportName: sourceNode.exportName
+        }))
+      }
+    };
+  }
+  if (command.kind === 'remove-node') {
+    const elements = matchingReplaceableElements(scope, command.target.sourceAnchorId);
+    if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
+    if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    const element = elements[0]!;
+    const parentId = command.target.parentSourceAnchorId;
+    const parent = parentId === undefined ? undefined : elementForAnchor(scope, parentId);
+    if (parent === 'ambiguous') return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
+    if (parent === undefined || directParent(element) !== parent)
+      return { kind: 'rejected', code: 'UNSUPPORTED_CONTAINER' };
+    const nextContent = `${file.content.slice(0, element.getStart(source))}${file.content.slice(element.end)}`;
+    const reparsed = ts.createSourceFile(
+      file.path,
+      nextContent,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
+    );
+    if (hasDiagnostic(reparsed)) return { kind: 'rejected', code: 'INVALID_TSX_SYNTAX' };
+    return {
+      kind: 'prepared',
+      proposal,
+      patch: {
+        path: file.path,
+        previousContent: file.content,
+        nextContent,
+        removedNodeIds: markedNodeIds(element)
+      }
+    };
+  }
   const elements = matchingElements(scope, command.target.sourceAnchorId);
   if (elements.length === 0) return { kind: 'rejected', code: 'MISSING_TARGET' };
   if (elements.length !== 1) return { kind: 'conflict', code: 'AMBIGUOUS_TARGET' };
@@ -1050,11 +1510,13 @@ export function prepareReactTsxDesignEdit(
       ...(command.kind === 'insert-child'
         ? {
             dependency: componentModuleSpecifier(command.component),
-            addedNode: {
-              nodeId: command.newSourceAnchorId,
-              path: file.path,
-              exportName: sourceNode.exportName
-            }
+            addedNodes: [
+              {
+                nodeId: command.newSourceAnchorId,
+                path: file.path,
+                exportName: sourceNode.exportName
+              }
+            ]
           }
         : {})
     }

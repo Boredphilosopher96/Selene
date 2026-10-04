@@ -165,6 +165,11 @@ const renderedInstance: CompilerRenderedInstanceIdentity = {
 };
 const subpathRevision: SubpathDesignRevision = parseDesignRevisionFromSubpath(revisionInput);
 const editProposal: DesignEditProposal = parseDesignEditProposalFromSubpath(designEditInput);
+const duplicateCommand: DesignEditProposal['commands'][number] = {
+  kind: 'duplicate-node',
+  target: { format: 'selene-design-edit-target/v1', operation: core.createDesignRevisionOperationTarget(revision, nodeInput), sourceAnchorId: 'orders.child', parentSourceAnchorId: 'orders.root' },
+  sourceAnchorRemaps: [{ fromSourceAnchorId: 'orders.child', toSourceAnchorId: 'orders.child-copy' }]
+};
 const bindingManifest: ReactBindingManifest = parseReactBindingManifestFromPrototype(bindingInput);
 const target: DesignRevisionOperationTarget = core.createDesignRevisionOperationTarget(revision, nodeInput);
 const operation: DesignRevisionOperationReference = core.createDesignRevisionOperationReference(
@@ -201,6 +206,7 @@ void revision;
 void migrationReceipt;
 void subpathRevision;
 void editProposal;
+void duplicateCommand;
 void bindingManifest;
 void designEditAdapter;
 void designEditDigestPort;
@@ -420,6 +426,19 @@ if (
   !Object.isFrozen(parsedEdit.preconditions)
 )
   throw new Error('packed core consumer did not preserve an immutable design edit proposal');
+const parsedDuplicate = core.parseDesignEditProposal({
+  ...parsedEdit,
+  commands: [{ kind: 'duplicate-node', target: { ...editTarget, parentSourceAnchorId: 'orders.parent' }, sourceAnchorRemaps: [{ fromSourceAnchorId: 'orders.root', toSourceAnchorId: 'orders.root-copy' }] }],
+  preconditions: [...parsedEdit.preconditions,
+    { kind: 'node-exists', sourceAnchorId: 'orders.root' },
+    { kind: 'node-exists', sourceAnchorId: 'orders.parent' },
+    { kind: 'parent-is', sourceAnchorId: 'orders.root', parentSourceAnchorId: 'orders.parent' }
+  ]
+});
+if (parsedDuplicate.commands[0]?.kind !== 'duplicate-node' ||
+    parsedDuplicate.commands[0].sourceAnchorRemaps[0]?.toSourceAnchorId !== 'orders.root-copy' ||
+    !Object.isFrozen(parsedDuplicate.commands[0].sourceAnchorRemaps))
+  throw new Error('packed core consumer did not preserve the duplicate marker inventory');
 const bindingManifest = core.parseReactBindingManifest({
   format: 'selene-react-binding-manifest/v1',
   schemaVersion: '2.0',

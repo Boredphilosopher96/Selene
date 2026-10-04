@@ -1043,6 +1043,30 @@ describe('collaboration snapshot wire format', () => {
 });
 
 describe('HTTP collaboration adapter', () => {
+  it('permits credentialed browser requests only for an explicitly allowed origin', async () => {
+    const service = createTestService({
+      repository: createInMemoryCollaborationRepository(),
+      authorizer: { authorize: async () => true },
+      ids: { next: () => 'cors-test' },
+      allowedOrigins: ['https://review.example.test']
+    });
+    const allowed = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://review.example.test' }
+      })
+    );
+    expect(allowed.headers.get('access-control-allow-origin')).toBe('https://review.example.test');
+    expect(allowed.headers.get('access-control-allow-credentials')).toBe('true');
+    const denied = await service(
+      new Request('https://service.test/v1/projects', {
+        method: 'OPTIONS',
+        headers: { origin: 'https://untrusted.example.test' }
+      })
+    );
+    expect(denied.headers.has('access-control-allow-origin')).toBe(false);
+    expect(denied.headers.has('access-control-allow-credentials')).toBe(false);
+  });
   it('validates writes, exports snapshots, exposes health and rate limits', async () => {
     const repository = createInMemoryCollaborationRepository();
     let id = 0;

@@ -11,6 +11,22 @@ const desktopManifest = JSON.parse(
   await readFile(new URL('./package.json', import.meta.url), 'utf8')
 );
 const electronVersion = desktopManifest.devDependencies.electron;
+const electronRuntimeChecksums = {
+  'electron-v43.5.0-darwin-arm64.zip':
+    '0ff66247702f76eb8b50cc6768b5c89dab6db8d862f0e1eb099c81b08db46163',
+  'electron-v43.5.0-darwin-x64.zip':
+    '600ecc194624415a1fc2022f3d2a2b9a1452578596ed44f910cfa23d274cfa8f',
+  'electron-v43.5.0-linux-x64.zip':
+    '3d93fb0b9517fcd74107c628f61990bff60d3c2543694c28b26b1ef78b80def1',
+  'electron-v43.5.0-win32-x64.zip':
+    '1fc131e62cafa02f0c94b5ec730c4eb1e8ce75e5f5b84f3c52a3443d86058184'
+};
+if (
+  Object.keys(electronRuntimeChecksums).some(
+    (file) => !file.startsWith(`electron-v${electronVersion}-`)
+  )
+)
+  throw new Error('Update the pinned Electron archive checksums together with its version.');
 const targetPlatform = process.env.SELENE_DESKTOP_TARGET_PLATFORM;
 const targetArch = process.env.SELENE_DESKTOP_TARGET_ARCH;
 if (!['macos', 'linux', 'windows'].includes(targetPlatform) || typeof targetArch !== 'string')
@@ -241,16 +257,7 @@ export default {
   // electron-builder does not need a separate network fetch for SHASUMS256.
   electronDownload: {
     force: false,
-    checksums: {
-      [`electron-v${electronVersion}-darwin-arm64.zip`]:
-        'ad4a0ae3c37ee05aa06c7e2ed0627608389790f0505a2b0d20319efbe33ffe28',
-      [`electron-v${electronVersion}-darwin-x64.zip`]:
-        '1349ff423539cfe2b3edf1b14111e618db234d9ba761cbe97ea549edcb2e7a98',
-      [`electron-v${electronVersion}-linux-x64.zip`]:
-        'f77ca6ed67bbc68702b69b56ad499bca6ae090705ade7d04f0ac545e409dec68',
-      [`electron-v${electronVersion}-win32-x64.zip`]:
-        'eba5f5088af40ecb364fe258809c79a5234c6ece5a75c64722772eba01b02786'
-    }
+    checksums: electronRuntimeChecksums
   },
   asar: true,
   // Vite/Rolldown resolve these files through native filesystem APIs. Keep the

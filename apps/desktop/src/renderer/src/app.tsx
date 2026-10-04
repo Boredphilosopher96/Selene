@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import { refreshGuidedInput, withoutGuidedSelection } from './cockpit/guided-input-refresh';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
 import { PreviewTargetCancel } from './cockpit/preview-target-cancel';
 import {
@@ -22,6 +23,7 @@ import {
   PreviewRefreshError,
   previewPresentationIdentityKey,
   retainCurrentSnapshotAfterPreviewRefresh,
+  retargetPreviewSelection,
   refreshPreviewRevision,
   samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
@@ -530,6 +532,7 @@ export function App() {
       currentSnapshot.current = next;
       setSelectedPreviewTelemetry(undefined);
       const renderedInitialRuntime = initialRuntimeState(next);
+      const selectionEpoch = previewSelectionEpoch.current;
       const controller = new AbortController();
       activePreviewRefresh.current = controller;
       try {
@@ -543,16 +546,17 @@ export function App() {
               ? { intent: 'presentation' as const }
               : {
                   intent: 'authoring' as const,
-                  retarget: async (accepted: DesignerSnapshot, revisionId: string) => {
-                    const selectedNodeId = accepted.selectedNodeId;
-                    if (!selectedNodeId) return accepted;
-                    const retargeted = await enqueuePreviewSelectionHostOperation(() =>
-                      window.selene.designer.selectNode(selectedNodeId)
-                    );
-                    if (retargeted.source.revision.id !== revisionId)
-                      throw new Error(`Host selection belongs to ${retargeted.source.revision.id}`);
-                    return retargeted;
-                  }
+                  retarget: (accepted: DesignerSnapshot, revisionId: string) =>
+                    retargetPreviewSelection({
+                      snapshot: accepted,
+                      revisionId,
+                      isCurrent: () =>
+                        selectionEpoch === previewSelectionEpoch.current &&
+                        !previewSelectionSuppressed.current,
+                      enqueue: enqueuePreviewSelectionHostOperation,
+                      readSnapshot: window.selene.designer.snapshot,
+                      selectNode: window.selene.designer.selectNode
+                    })
                 },
           signal: controller.signal
         });
@@ -577,7 +581,7 @@ export function App() {
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
     },
-    [compile, presentPreviewBuild]
+    [compile, presentPreviewBuild, enqueuePreviewSelectionHostOperation]
   );
   const previewAIProposal = useCallback(
     async (input: AIProposalDecisionInput): Promise<void> => {
@@ -1288,17 +1292,71 @@ export function App() {
     );
     return queued;
   };
+  const refreshGuidedInputs = <T,>(
+    operation: () => Promise<T>,
+    complete: (committed: T, acknowledged: DesignerSnapshot | undefined) => T = (committed) =>
+      committed
+  ): Promise<T> => {
+    const previous = currentSnapshot.current ?? snapshot;
+    const requireCurrentProject = () => {
+      if (
+        projectSwitchInFlight.current ||
+        currentSnapshot.current?.source.projectId !== previous.source.projectId
+      )
+        throw new Error('Project changed after saving design inputs.');
+    };
+    return refreshGuidedInput({
+      previous,
+      operation,
+      clearSelection: () => {
+        requireCurrentProject();
+        clearPreviewSelection();
+      },
+      snapshot: async () => {
+        const next = await window.selene.designer.snapshot();
+        requireCurrentProject();
+        return withoutGuidedSelection(next);
+      },
+      onSnapshot: setSnapshot,
+      render,
+      onRefreshFailure: () =>
+        setNotice('Design inputs were saved. The preview could not refresh; reload to recover it.'),
+      complete
+    });
+  };
   const guidedActions = {
     selectAgent: window.selene.designer.selectAgent,
     configureTrustedAgent: window.selene.designer.configureTrustedAgent,
     snapshot: window.selene.designer.snapshot,
-    inspectDesignSystem: window.selene.designer.inspectDesignSystem,
-    setDesignSystemInputs: window.selene.designer.setDesignSystemInputs,
-    setDesignLanguageInputs: window.selene.designer.setDesignLanguageInputs,
-    ingestDesignLanguage: window.selene.designer.ingestDesignLanguage,
-    chooseDesignLanguageToImport: window.selene.designer.chooseDesignLanguageToImport,
-    refreshDesignLanguageSource: window.selene.designer.refreshDesignLanguageSource,
-    chooseDesignLanguageSourceToRelink: window.selene.designer.chooseDesignLanguageSourceToRelink
+    inspectDesignSystem: (...args: Parameters<typeof window.selene.designer.inspectDesignSystem>) =>
+      refreshGuidedInputs(() => window.selene.designer.inspectDesignSystem(...args)),
+    setDesignSystemInputs: (
+      ...args: Parameters<typeof window.selene.designer.setDesignSystemInputs>
+    ) =>
+      refreshGuidedInputs(
+        () => window.selene.designer.setDesignSystemInputs(...args),
+        (committed, acknowledged) => acknowledged ?? withoutGuidedSelection(committed)
+      ),
+    setDesignLanguageInputs: (
+      ...args: Parameters<typeof window.selene.designer.setDesignLanguageInputs>
+    ) =>
+      refreshGuidedInputs(
+        () => window.selene.designer.setDesignLanguageInputs(...args),
+        (committed, acknowledged) => acknowledged ?? withoutGuidedSelection(committed)
+      ),
+    ingestDesignLanguage: (
+      ...args: Parameters<typeof window.selene.designer.ingestDesignLanguage>
+    ) => refreshGuidedInputs(() => window.selene.designer.ingestDesignLanguage(...args)),
+    chooseDesignLanguageToImport: (
+      ...args: Parameters<typeof window.selene.designer.chooseDesignLanguageToImport>
+    ) => refreshGuidedInputs(() => window.selene.designer.chooseDesignLanguageToImport(...args)),
+    refreshDesignLanguageSource: (
+      ...args: Parameters<typeof window.selene.designer.refreshDesignLanguageSource>
+    ) => refreshGuidedInputs(() => window.selene.designer.refreshDesignLanguageSource(...args)),
+    chooseDesignLanguageSourceToRelink: (
+      ...args: Parameters<typeof window.selene.designer.chooseDesignLanguageSourceToRelink>
+    ) =>
+      refreshGuidedInputs(() => window.selene.designer.chooseDesignLanguageSourceToRelink(...args))
   };
   const saveCockpitPreferences = (next: WorkspaceCockpitPreferences) => {
     desiredCockpitPreferences.current = next;
@@ -1430,6 +1488,7 @@ export function App() {
           cancelAIChange: window.selene.designer.cancel,
           undoLastAIChange: window.selene.designer.undoLastAIChange,
           undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
+          redoLatestManualDesignEdit: window.selene.designer.redoLatestManualDesignEdit,
           mintArtifactSelectionReceipt: window.selene.designer.mintArtifactSelectionReceipt,
           addReviewThread: window.selene.designer.addReviewThread,
           resolveReviewThread: window.selene.designer.resolveReviewThread,

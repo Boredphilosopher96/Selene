@@ -8,6 +8,14 @@ import type {
 } from '../../../shared/designer-api';
 import { safeDesignerNotice } from '../presentation-error';
 
+export function manualHistoryActionLabel(
+  action: 'undo' | 'redo',
+  activeOperation?: 'undo' | 'redo'
+): string {
+  if (action === activeOperation) return action === 'undo' ? 'Undoing…' : 'Redoing…';
+  return action === 'undo' ? 'Undo manual change' : 'Redo manual change';
+}
+
 export function isHostRequestActive(progress: DesignerProgress | undefined): boolean {
   return (
     progress?.stage === 'started' ||

@@ -805,6 +805,68 @@ export interface PendingAIProposal {
   readonly candidateRevisionId: string;
   readonly summary: string;
   readonly createdAt: string;
+  readonly review?: AIProposalReview;
+}
+
+export interface AIProposalSourceChange {
+  readonly path: string;
+  readonly kind: 'added' | 'removed' | 'modified';
+  readonly beforeDigest?: string;
+  readonly afterDigest?: string;
+  /** Exact replacement hunk, including unchanged context and missing-final-newline markers. */
+  readonly diff: string;
+}
+
+export interface AIProposalReview {
+  readonly format: 'selene-ai-proposal-review/v1';
+  readonly status: 'current' | 'stale' | 'unavailable';
+  readonly identity: {
+    readonly projectId: string;
+    readonly sourceRevisionId: string;
+    readonly sourceDigest?: string;
+    readonly baseRevisionId: string;
+    readonly baseDigest: string;
+    readonly candidateRevisionId: string;
+    readonly candidateDigest?: string;
+  };
+  readonly sourceChanges: readonly AIProposalSourceChange[];
+  readonly coverage: {
+    readonly totalChangedFiles: number;
+    readonly shownFiles: number;
+    readonly omittedFiles: number;
+    readonly omittedPaths: readonly string[];
+    readonly diffBytes: number;
+    readonly complete: boolean;
+  };
+  readonly metadataChanges: {
+    readonly entrypoint?: { readonly before: string; readonly after: string };
+    readonly dependenciesAdded: readonly string[];
+    readonly dependenciesRemoved: readonly string[];
+    readonly nodeMappingsChanged: number;
+  };
+  readonly affected: {
+    readonly components: readonly { readonly path: string; readonly exportName: string }[];
+    readonly sourceNodeIds: readonly string[];
+    readonly screenIds: readonly string[];
+    readonly scenarioIds: readonly string[];
+    readonly mappingsComplete: boolean;
+  };
+  readonly compilationEvidence?: {
+    readonly projectId: string;
+    readonly sourceRevisionId: string;
+    readonly sourceDigest: string;
+    readonly bindingDigest: string;
+    readonly compilerId: string;
+    readonly compilerDigest: string;
+    readonly previewDigest: string;
+  };
+  readonly checks: readonly {
+    readonly id:
+      'identity' | 'source-validation' | 'compilation' | 'runtime' | 'accessibility' | 'visual';
+    readonly status: 'passed' | 'failed' | 'not-recorded' | 'not-run';
+    readonly description: string;
+  }[];
+  readonly warnings: readonly string[];
 }
 
 export interface AIProposalDecisionInput {
@@ -817,13 +879,24 @@ export interface ManualDesignUndoInput {
   readonly projectId: string;
   readonly undoId: string;
   readonly targetRevisionId: string;
+  readonly currentRevisionId: string;
 }
+
+export type ManualDesignRedoInput = ManualDesignUndoInput;
 
 export interface DesignActivityEntry {
   readonly id: string;
   readonly origin: 'manual' | 'agent';
   readonly kind:
-    'ai-change' | 'content' | 'layout' | 'appearance' | 'position' | 'reorder' | 'reparent';
+    | 'ai-change'
+    | 'content'
+    | 'layout'
+    | 'appearance'
+    | 'position'
+    | 'reorder'
+    | 'reparent'
+    | 'remove'
+    | 'duplicate';
   readonly label: string;
   readonly actorLabel: string;
   readonly createdAt: string;
@@ -831,6 +904,11 @@ export interface DesignActivityEntry {
     'queued' | 'running' | 'reviewing' | 'applied' | 'failed' | 'cancelled' | 'undone';
   readonly referenceId: string;
   readonly resultingRevisionId?: string;
+  readonly redo?: Readonly<{
+    readonly undoId: string;
+    readonly targetRevisionId: string;
+    readonly available: boolean;
+  }>;
   readonly undo?: Readonly<{
     readonly undoId: string;
     readonly targetRevisionId: string;
@@ -869,6 +947,43 @@ export interface ManualTextEditApplyRequest {
   readonly projectId: string;
   readonly capabilityId: string;
   readonly content: string;
+}
+
+/** A short-lived host grant to remove one compiler-authenticated JSX subtree. */
+export interface ManualElementRemoveCapability {
+  readonly kind: 'available';
+  readonly capabilityId: string;
+  readonly nodeId: string;
+  readonly revisionId: string;
+  readonly expiresAt: string;
+}
+
+export interface ManualElementRemoveUnavailable {
+  readonly kind: 'unavailable';
+  readonly code:
+    | 'PROJECT_MISMATCH'
+    | 'STALE_SELECTION'
+    | 'MAPPED_ELEMENT_UNAVAILABLE'
+    | 'MANUAL_EDIT_UNAVAILABLE';
+}
+
+export type ManualElementRemoveCapabilityRequest = ManualTextEditCapabilityRequest;
+
+/** Duplication uses fresh identities minted by the compiler-authorized host. */
+export type ManualElementDuplicateCapability = ManualElementRemoveCapability;
+export type ManualElementDuplicateUnavailable = ManualElementRemoveUnavailable;
+export type ManualElementDuplicateCapabilityRequest = ManualTextEditCapabilityRequest;
+export interface ManualElementDuplicateApplyRequest {
+  readonly format: 'selene-desktop-manual-element-duplicate-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
+}
+
+/** Renderer confirms only the opaque, exact removal grant; source identity stays in main. */
+export interface ManualElementRemoveApplyRequest {
+  readonly format: 'selene-desktop-manual-element-remove-apply/v1';
+  readonly projectId: string;
+  readonly capabilityId: string;
 }
 
 export const MANUAL_LAYOUT_PROPERTIES = [
@@ -1319,7 +1434,43 @@ export type HostedStakeholderReviewStatus =
 /** Static review delivery is independent from synchronized team discussion. */
 export type HostedStaticReviewStatus =
   | { readonly status: 'not-generated'; readonly reason: 'STATIC_REVIEW_NOT_GENERATED' }
+  | {
+      readonly status: 'prepared';
+      readonly reason: 'BUILD_AND_DEPLOYMENT_REQUIRED';
+      readonly workflowPath: '.github/workflows/selene-pages.yml';
+    }
   | { readonly status: 'ready'; readonly url: string };
+/** Repository files are committed; static output paths become deliverable only after a build/deployment. */
+interface GeneratedProjectPublicationOutputsBase {
+  readonly format: 'selene-generated-project-publication-outputs/v1';
+  readonly delivery: 'repository-source';
+  readonly projectId: string;
+  readonly sourceRevisionId: string;
+  readonly graphRevision: number;
+  readonly repositoryCommitUrl: string;
+  readonly sourceArchiveUrl: string;
+  readonly committedPaths: {
+    readonly sourceEntrypoint: string;
+    readonly bundleManifest: 'selene/bundle.json';
+    readonly reviewSeed: 'selene/review-seed.json';
+    readonly componentCatalog: 'selene/component-catalog.json';
+    readonly lockfile: 'bun.lock';
+    readonly pagesWorkflow: '.github/workflows/selene-pages.yml';
+  };
+  readonly staticBuildPaths: {
+    readonly review: 'index.html';
+    readonly prototype: 'index.html?view=prototype';
+    readonly catalog: 'storybook/';
+    readonly manifest: 'review/manifest.json';
+    readonly receipt: 'review/receipt.json';
+  };
+  readonly independentAcceptance: false;
+}
+export type GeneratedProjectPublicationOutputs = GeneratedProjectPublicationOutputsBase &
+  (
+    | { readonly handoffStatus: 'draft'; readonly bindingIncluded: false }
+    | { readonly handoffStatus: 'compiler-bound'; readonly bindingIncluded: true }
+  );
 export interface HostedReviewReadiness {
   readonly staticReview: HostedStaticReviewStatus;
   readonly collaboration: HostedStakeholderReviewStatus;
@@ -1348,6 +1499,7 @@ export type GeneratedCodePublishReceipt =
       readonly pullRequestUrl: string;
       readonly immutableId: string;
       readonly hostedReview: HostedReviewReadiness;
+      readonly generatedOutputs?: GeneratedProjectPublicationOutputs;
     };
 export interface GeneratedCodePublishOperation {
   readonly id: string;
@@ -1544,13 +1696,14 @@ export function validateManualDesignUndo(value: unknown): ManualDesignUndoInput 
   const input = record(value, 'manual design undo request');
   const keys = Object.keys(input);
   if (
-    keys.length !== 3 ||
+    keys.length !== 4 ||
     !keys.includes('projectId') ||
     !keys.includes('undoId') ||
-    !keys.includes('targetRevisionId')
+    !keys.includes('targetRevisionId') ||
+    !keys.includes('currentRevisionId')
   )
     throw new Error(
-      'manual design undo request must contain only projectId, undoId, and targetRevisionId'
+      'manual design undo request must contain only projectId, undoId, targetRevisionId, and currentRevisionId'
     );
   for (const key of keys) {
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
@@ -1566,7 +1719,8 @@ export function validateManualDesignUndo(value: unknown): ManualDesignUndoInput 
   return {
     projectId: validateDesignerIdentifier(input.projectId, 'projectId'),
     undoId: validateDesignerIdentifier(input.undoId, 'undoId'),
-    targetRevisionId: validateDesignerIdentifier(input.targetRevisionId, 'targetRevisionId')
+    targetRevisionId: validateDesignerIdentifier(input.targetRevisionId, 'targetRevisionId'),
+    currentRevisionId: validateDesignerIdentifier(input.currentRevisionId, 'currentRevisionId')
   };
 }
 

@@ -159,6 +159,36 @@ describe('Bun collaboration service integration harness', () => {
       })
     );
     expect(readiness.status).toBe(201);
+    for (let index = 0; index < 501; index += 1) {
+      // Exercise more than one durable SSE replay page without routing 501
+      // unrelated mutations through the HTTP fixture.
+      // eslint-disable-next-line no-await-in-loop
+      await repository.appendEvent({
+        id: `hosted-replay-event-${index}`,
+        projectId,
+        type: 'review_thread.test',
+        resourceType: 'review_thread',
+        resourceId: `hosted-replay-thread-${index}`,
+        payload: {},
+        occurredAt: new Date(1_700_000_000_000 + index).toISOString()
+      });
+    }
+    const replay = await application.fetch(
+      new Request(`https://service.test/v1/projects/${projectId}/events/stream?after=0`, {
+        headers: sessionHeaders('reviewer-a')
+      })
+    );
+    const replayReader = replay.body!.getReader();
+    const decoder = new TextDecoder();
+    let replayed = '';
+    while (!replayed.includes('hosted-replay-event-500')) {
+      // eslint-disable-next-line no-await-in-loop
+      const chunk = await replayReader.read();
+      if (chunk.done) break;
+      replayed += decoder.decode(chunk.value, { stream: true });
+    }
+    await replayReader.cancel();
+    expect(replayed).toContain('hosted-replay-event-500');
     const options = {
       serviceUrl: 'https://service.test',
       reviewUrl: 'https://review.example.test/review',

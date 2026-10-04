@@ -33,6 +33,8 @@ import { PrototypeRuntimePreview } from '@selene/ui/prototype-runtime';
 import type { WorkspaceStatus } from '@selene/ui/workspace';
 
 import { createPrototypeBrowserNavigation } from './prototype-browser-navigation';
+import { PublicationReviewPortal } from './publication-review-portal';
+import { ProjectRecoveryPage } from './project-recovery-page';
 import { type ArtifactAnchor } from './hosted-review-collaboration';
 import {
   createHostedElementInspection,
@@ -1593,33 +1595,61 @@ export function HostedReviewPortal({
   };
 
   useEffect(() => {
+    const subscribe = provider.subscribe;
     let active = true;
-    void stateHostedReviewThroughHost(context, provider, binding).then(
-      (state) => {
-        if (active) {
+    let refreshQueued = false;
+    let refreshRunning = false;
+    let refreshAgain = false;
+    const reload = async () => {
+      if (!active) return;
+      if (refreshRunning) {
+        refreshAgain = true;
+        return;
+      }
+      refreshRunning = true;
+      do {
+        refreshAgain = false;
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- serialize invalidation refreshes so older results cannot win.
+          const [state, loaded] = await Promise.all([
+            stateHostedReviewThroughHost(context, provider, binding),
+            listHostedReviewThroughHost(context, provider, binding)
+          ]);
+          if (!active) return;
+          setThreads(loaded.map(reviewThreadView));
           setProviderInfo(state);
           setProviderState(state.sync);
+          setStorageError(undefined);
+        } catch {
+          if (!active) return;
+          setProviderState('error');
+          setStorageError(
+            'Live review updates could not be refreshed. Reopen the review to retry.'
+          );
         }
-      },
-      () => {
-        if (active) setProviderState('error');
-      }
-    );
-    void listHostedReviewThroughHost(context, provider, binding).then(
-      (loaded) => {
-        if (!active) return;
-        setThreads(loaded.map(reviewThreadView));
-      },
-      () => {
-        if (!active) return;
-        setProviderState('error');
-        setStorageError(
-          'The review provider could not be read. Existing review data was not changed.'
-        );
-      }
-    );
+      } while (refreshAgain);
+      refreshRunning = false;
+    };
+    const refresh = () => {
+      if (!active || refreshQueued) return;
+      refreshQueued = true;
+      queueMicrotask(() => {
+        refreshQueued = false;
+        void reload();
+      });
+    };
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = subscribe?.call(provider, binding, refresh, () => {
+        if (active) setProviderState('offline');
+      });
+    } catch {
+      setProviderState('offline');
+    }
+    void reload();
     return () => {
       active = false;
+      unsubscribe?.();
     };
   }, [binding, context, provider]);
 
@@ -1963,6 +1993,10 @@ export function HostedReviewPortal({
       </header>
 
       <nav className="review-nav" aria-label="Review sections">
+        {providerInfo.provider === 'hosted' &&
+        hostedReviewConfiguration.serviceUrl !== undefined ? (
+          <a href={`?recoveryProject=${encodeURIComponent(binding.projectId)}`}>Project recovery</a>
+        ) : null}
         {navigation.map((item) => (
           <button
             type="button"
@@ -2590,5 +2624,9 @@ function PrototypeStudio() {
 
 /** The local designer remains the normal web root; hosted review is an explicit route or build. */
 export function App() {
+  if (new URL(window.location.href).searchParams.has('recoveryProject'))
+    return <ProjectRecoveryPage serviceUrl={hostedReviewConfiguration.serviceUrl} />;
+  if (new URL(window.location.href).searchParams.has('publication'))
+    return <PublicationReviewPortal />;
   return isHostedReviewLocation() ? <HostedReviewPortal /> : <DesignerWorkspaceApp />;
 }

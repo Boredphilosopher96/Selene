@@ -13,6 +13,7 @@ import {
   isCurrentProjectOwner,
   isConversationBusy,
   isCurrentProjectProgress,
+  manualHistoryActionLabel,
   requestInput,
   requestOutcome
 } from './ai-conversation-model';
@@ -50,6 +51,15 @@ const selectionReceipt: ArtifactSelectionReceipt = {
 };
 
 describe('AI conversation request model', () => {
+  it('labels only the pending manual history operation', () => {
+    expect(manualHistoryActionLabel('undo')).toBe('Undo manual change');
+    expect(manualHistoryActionLabel('redo')).toBe('Redo manual change');
+    expect(manualHistoryActionLabel('undo', 'undo')).toBe('Undoing…');
+    expect(manualHistoryActionLabel('redo', 'undo')).toBe('Redo manual change');
+    expect(manualHistoryActionLabel('undo', 'redo')).toBe('Undo manual change');
+    expect(manualHistoryActionLabel('redo', 'redo')).toBe('Redoing…');
+  });
+
   it('requires a current authenticated target before retrying historical display data', () => {
     expect(requestInput(request)).toBeUndefined();
     expect(requestInput(request, selectionReceipt)).toEqual({
@@ -100,6 +110,8 @@ describe('AI conversation request model', () => {
       message: 'Preparing a safe patch.'
     };
     expect(isHostRequestActive(progress)).toBe(true);
+    for (const stage of ['completed', 'cancelled', 'error'] as const)
+      expect(isHostRequestActive({ ...progress, stage })).toBe(false);
     expect(
       isCurrentProjectProgress({
         progress,

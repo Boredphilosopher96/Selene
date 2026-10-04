@@ -215,6 +215,22 @@ function fixtureIssue(value: unknown): string | undefined {
   return estimatedBytes > maxFixtureBytes ? 'fixtures exceed maximum serialized size' : undefined;
 }
 
+/** Build once per operation; mutable caller graphs must never reuse stale indexes. */
+function transitionTargetsBySource(
+  transitions: readonly PrototypeTransition[]
+): Map<string, Set<string>> {
+  const targetsBySource = new Map<string, Set<string>>();
+  for (const transition of transitions) {
+    if (!('to' in transition)) continue;
+    const sourceId = transition.from.nodeId;
+    const targetId = transition.to.nodeId;
+    const targets = targetsBySource.get(sourceId);
+    if (targets) targets.add(targetId);
+    else targetsBySource.set(sourceId, new Set([targetId]));
+  }
+  return targetsBySource;
+}
+
 export const prototypeGraphSchema = strictObject({
   format: literal(prototypeGraphFormat),
   id: idSchema,
@@ -234,6 +250,11 @@ export const prototypeGraphSchema = strictObject({
     if (invalidFixtures)
       context.addIssue({ code: 'custom', message: invalidFixtures, path: ['fixtures'] });
     const nodeIds = new Set(graph.nodes.map((node) => node.id));
+    const nodesById = new Map<string, PrototypeNode>();
+    // Keep the first match so invalid duplicate-ID inputs retain their existing
+    // diagnostic semantics while the duplicate itself is still rejected below.
+    for (const node of graph.nodes) if (!nodesById.has(node.id)) nodesById.set(node.id, node);
+    const targetsBySource = transitionTargetsBySource(graph.transitions);
     if (nodeIds.size !== graph.nodes.length)
       context.addIssue({ code: 'custom', message: 'node IDs must be unique', path: ['nodes'] });
     if (graph.viewState) {
@@ -270,7 +291,7 @@ export const prototypeGraphSchema = strictObject({
         message: 'each action port may have only one transition',
         path: ['transitions']
       });
-    const initial = graph.nodes.find((node) => node.id === graph.initialNodeId);
+    const initial = nodesById.get(graph.initialNodeId);
     if (initial?.kind !== 'screen' && initial?.kind !== 'page')
       context.addIssue({
         code: 'custom',
@@ -280,7 +301,7 @@ export const prototypeGraphSchema = strictObject({
 
     for (const [index, node] of graph.nodes.entries()) {
       if (node.kind === 'state') {
-        const parent = graph.nodes.find((candidate) => candidate.id === node.parentId);
+        const parent = nodesById.get(node.parentId);
         if (parent?.kind !== 'screen' && parent?.kind !== 'page')
           context.addIssue({
             code: 'custom',
@@ -309,14 +330,15 @@ export const prototypeGraphSchema = strictObject({
         path: ['scenarios']
       });
     for (const [index, scenario] of graph.scenarios.entries()) {
-      const start = graph.nodes.find((node) => node.id === scenario.startNodeId);
+      const start = nodesById.get(scenario.startNodeId);
       if (start?.kind !== 'screen' && start?.kind !== 'page')
         context.addIssue({
           code: 'custom',
           message: 'scenario startNodeId must reference a screen or page',
           path: ['scenarios', index, 'startNodeId']
         });
-      const initialState = graph.nodes.find((node) => node.id === scenario.initialStateId);
+      const initialState =
+        scenario.initialStateId === undefined ? undefined : nodesById.get(scenario.initialStateId);
       if (scenario.initialStateId !== undefined && initialState?.kind !== 'state')
         context.addIssue({
           code: 'custom',
@@ -345,14 +367,7 @@ export const prototypeGraphSchema = strictObject({
       for (let pathIndex = 1; pathIndex < scenario.expectedPath.length; pathIndex += 1) {
         const fromNodeId = scenario.expectedPath[pathIndex - 1]!;
         const toNodeId = scenario.expectedPath[pathIndex]!;
-        if (
-          !graph.transitions.some(
-            (transition) =>
-              transition.from.nodeId === fromNodeId &&
-              'to' in transition &&
-              transition.to.nodeId === toNodeId
-          )
-        )
+        if (!targetsBySource.get(fromNodeId)?.has(toNodeId))
           context.addIssue({
             code: 'custom',
             message: 'scenario expectedPath contains an unwired transition',
@@ -361,7 +376,7 @@ export const prototypeGraphSchema = strictObject({
       }
     }
     for (const [index, transition] of graph.transitions.entries()) {
-      const source = graph.nodes.find((node) => node.id === transition.from.nodeId);
+      const source = nodesById.get(transition.from.nodeId);
       if (!source)
         context.addIssue({
           code: 'custom',
@@ -375,7 +390,7 @@ export const prototypeGraphSchema = strictObject({
           path: ['transitions', index, 'from', 'portId']
         });
       if (transition.kind === 'back' || transition.kind === 'reset-flow') continue;
-      const target = graph.nodes.find((node) => node.id === transition.to.nodeId);
+      const target = nodesById.get(transition.to.nodeId);
       if (!target)
         context.addIssue({
           code: 'custom',
@@ -756,16 +771,11 @@ export function removePrototypeTransition(
   if (!graphValue.transitions.some((transition) => transition.id === transitionId))
     throw new PrototypeGraphValidationError(['transition does not exist']);
   const transitions = graphValue.transitions.filter((transition) => transition.id !== transitionId);
+  const targetsBySource = transitionTargetsBySource(transitions);
   const scenarios = graphValue.scenarios.map((scenario) => {
     const firstUnwiredStep = scenario.expectedPath.findIndex(
       (nodeId, index) =>
-        index > 0 &&
-        !transitions.some(
-          (transition) =>
-            transition.from.nodeId === scenario.expectedPath[index - 1] &&
-            'to' in transition &&
-            transition.to.nodeId === nodeId
-        )
+        index > 0 && !targetsBySource.get(scenario.expectedPath[index - 1]!)?.has(nodeId)
     );
     return firstUnwiredStep < 0
       ? scenario

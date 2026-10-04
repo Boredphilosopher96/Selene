@@ -53,6 +53,14 @@ import type {
   ManualTextEditApplyRequest,
   ManualTextEditCapability,
   ManualTextEditCapabilityRequest,
+  ManualElementDuplicateApplyRequest,
+  ManualElementDuplicateCapabilityRequest,
+  ManualElementRemoveApplyRequest,
+  ManualElementDuplicateCapability,
+  ManualElementDuplicateUnavailable,
+  ManualElementRemoveCapability,
+  ManualElementRemoveCapabilityRequest,
+  ManualElementRemoveUnavailable,
   ManualTextEditUnavailable
 } from '../../shared/designer-api';
 import type {
@@ -164,6 +172,18 @@ declare global {
         applyManualTextEdit(
           input: ManualTextEditApplyRequest
         ): Promise<import('@selene/core').DesignEditResult>;
+        requestManualElementRemoveCapability(
+          input: ManualElementRemoveCapabilityRequest
+        ): Promise<ManualElementRemoveCapability | ManualElementRemoveUnavailable>;
+        applyManualElementRemove(
+          input: ManualElementRemoveApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
+        requestManualElementDuplicateCapability(
+          input: ManualElementDuplicateCapabilityRequest
+        ): Promise<ManualElementDuplicateCapability | ManualElementDuplicateUnavailable>;
+        applyManualElementDuplicate(
+          input: ManualElementDuplicateApplyRequest
+        ): Promise<import('@selene/core').DesignEditResult>;
         requestManualLayoutEditCapability(
           input: ManualLayoutEditCapabilityRequest
         ): Promise<ManualLayoutEditCapability | ManualLayoutEditUnavailable>;
@@ -212,6 +232,7 @@ declare global {
         ): Promise<import('@selene/core').DesignEditResult>;
         undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
         undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+        redoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
         cancel(requestId: string): Promise<void>;
         configureProductShell(
           input: import('../../shared/designer-api').ProductShellConfigurationInput

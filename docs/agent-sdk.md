@@ -113,3 +113,22 @@ await host.request(
 For tests that do not need process behavior, use `DeterministicFakeAdapter`.
 It streams a predeclared sequence without providers, timers, filesystem access,
 or network access.
+
+## CLI adapter example
+
+[`examples/adapters/codex-jsonl.mjs`](../examples/adapters/codex-jsonl.mjs)
+bridges an installed, signed-in Codex CLI to the same `react.revise` JSONL
+protocol. Register the Node executable and adapter as a trusted desktop agent;
+pass the absolute CLI executable as the adapter's first argument. The core does
+not depend on this example or on a specific provider.
+
+The adapter requests a structured source patch in a disposable read-only
+workspace. It does not write the designer's source. Selene validates, compiles,
+and stages the patch for review before acceptance. Cancellation stops the CLI
+process group and removes the disposable files. CLI stderr stays private; a
+failure returns an actionable error without credential or terminal output.
+
+The example uses the CLI's existing local sign-in, ignores user configuration
+and project rules, and uses the CLI's default model. A request uses that account's
+normal provider allowance. Configure it only on a host where this CLI and
+account are approved.

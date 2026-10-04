@@ -104,6 +104,14 @@ export interface ArtifactDirectManipulationProps {
     readonly capabilityId: string;
     readonly content: string;
   }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onRemoveSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
+  readonly onDuplicateSelectedElement: (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }) => Promise<Readonly<{ applied: boolean; message: string }>>;
   readonly onResizeSelectedElement: (input: {
     readonly nodeId: string;
     readonly revisionId: string;
@@ -534,6 +542,8 @@ export function ArtboardPreview({
   onNavigateThread,
   selectedElement,
   onSelectedElementContextAction,
+  onRemoveSelectedElement,
+  onDuplicateSelectedElement,
   onCreateArtifactThread,
   onClearElementSelection,
   onBeginSelectedElementTextEdit,
@@ -1960,6 +1970,59 @@ export function ArtboardPreview({
                           }}
                         >
                           {textEditSession ? 'Close text' : 'Edit text'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy ||
+                            layoutBusy !== undefined ||
+                            resizeBusy !== undefined ||
+                            moveBusy ||
+                            structureBusy
+                          }
+                          onClick={async () => {
+                            if (!selectedElement) return;
+                            setStructureBusy(true);
+                            setResizeStatus('Duplicating element…');
+                            try {
+                              const outcome = await onDuplicateSelectedElement({
+                                nodeId: selectedElement.nodeId,
+                                revisionId: selectedElement.revisionId
+                              });
+                              setResizeStatus(outcome.message);
+                            } finally {
+                              setStructureBusy(false);
+                            }
+                          }}
+                        >
+                          Duplicate
+                        </button>
+                        <button
+                          type="button"
+                          disabled={
+                            textEditBusy ||
+                            layoutBusy !== undefined ||
+                            resizeBusy !== undefined ||
+                            moveBusy ||
+                            structureBusy
+                          }
+                          onClick={async () => {
+                            if (!selectedElement || !window.confirm('Remove this React element?'))
+                              return;
+                            setStructureBusy(true);
+                            setResizeStatus('Removing element…');
+                            try {
+                              const outcome = await onRemoveSelectedElement({
+                                nodeId: selectedElement.nodeId,
+                                revisionId: selectedElement.revisionId
+                              });
+                              setResizeStatus(outcome.message);
+                            } finally {
+                              setStructureBusy(false);
+                            }
+                          }}
+                        >
+                          Remove
                         </button>
                       </div>
                       {textEditSession ? (

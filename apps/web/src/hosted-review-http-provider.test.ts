@@ -138,3 +138,51 @@ test('rejects extra remote binding fields instead of accepting ambiguous authori
     provider([responseWithJson({ ...binding, tenantRole: 'owner' })]).list(binding)
   ).rejects.toThrow('review-binding:mismatch');
 });
+
+test('subscribes to durable review events and closes the stream on disposal', () => {
+  const listeners = new Map<string, (event?: MessageEvent<string>) => void>();
+  let streamUrl = '';
+  let closed = false;
+  const reviewProvider = createHostedReviewHttpProvider({
+    serviceUrl: 'https://service.example.test',
+    reviewUrl: 'https://review.example.test/orders',
+    revisionFingerprint: 'a'.repeat(64),
+    screenId: 'orders',
+    eventSource: (url) => {
+      streamUrl = url;
+      return {
+        addEventListener(type, listener) {
+          listeners.set(type, listener as (event?: MessageEvent<string>) => void);
+        },
+        close() {
+          closed = true;
+        }
+      };
+    }
+  });
+  let changes = 0;
+  let errors = 0;
+  const dispose = reviewProvider.subscribe!(
+    binding,
+    () => changes++,
+    () => errors++
+  );
+  expect(streamUrl).toBe('https://service.example.test/v1/projects/project-review/events/stream');
+  listeners.get('change')?.({
+    data: JSON.stringify({ projectId: binding.projectId, resourceType: 'review_thread' })
+  } as MessageEvent<string>);
+  listeners.get('change')?.({
+    data: JSON.stringify({ projectId: binding.projectId, resourceType: 'revision' })
+  } as MessageEvent<string>);
+  expect(changes).toBe(1);
+  listeners.get('error')?.();
+  expect(errors).toBe(1);
+  listeners.get('open')?.();
+  expect(changes).toBe(2);
+  dispose();
+  expect(closed).toBe(true);
+  listeners.get('change')?.({
+    data: JSON.stringify({ projectId: binding.projectId, resourceType: 'review_thread' })
+  } as MessageEvent<string>);
+  expect(changes).toBe(2);
+});

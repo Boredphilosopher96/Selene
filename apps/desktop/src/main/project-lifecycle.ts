@@ -7,6 +7,8 @@ import { isDeepStrictEqual, types } from 'node:util';
 import {
   parseDesignRevision,
   parseReactBindingManifest,
+  parsePrototypeGraph,
+  type PrototypeGraph,
   serializeCanonicalData,
   validateDesignBaselineState,
   validateReactSourceWorkspace,
@@ -15,6 +17,7 @@ import {
   type ReactBindingManifest,
   type ReactSourceWorkspace
 } from '@selene/core';
+import type { ManualReactEditCompilerEvidence } from './manual-react-edit-transaction';
 import { parseSnapshot, serializeSnapshot } from '@selene/collaboration';
 import type { DesignBaselineState } from '@selene/core';
 import {
@@ -37,6 +40,7 @@ export interface LocalDesignerState {
   readonly format: 'selene-local-designer-state/v1';
   readonly version: 1;
   readonly baseline: DesignBaselineState;
+  readonly prototypeGraph?: Readonly<{ revision: number; graph: PrototypeGraph }>;
   readonly collaborationSnapshot: string;
   /** Inert binding data only. Compiler evidence is always reissued by the host after reopen. */
   readonly reactBinding?: ReactBindingManifest;
@@ -44,6 +48,7 @@ export interface LocalDesignerState {
   readonly manualReactEditAuthority?: LocalManualReactEditAuthority;
   /** Bounded, digest-only replay and recovery records; source never appears here. */
   readonly manualReactEditJournal?: readonly LocalManualReactEditJournalEntry[];
+  readonly archivedManualReactEditJournal?: readonly LocalManualReactEditJournalEntry[];
   /** Host-only staged agent candidate; never projected through preload. */
   readonly pendingAIProposal?: LocalPendingAIProposal;
   /** Inert receipts only; raw Markdown is isolated in the host-only guidance field, never setup. */
@@ -59,6 +64,7 @@ export interface LocalPendingAIProposal {
   readonly baseFingerprint: string;
   readonly candidateWorkspace: ReactSourceWorkspace;
   readonly candidateFingerprint: string;
+  readonly compileEvidence?: ManualReactEditCompilerEvidence;
   readonly summary: string;
   readonly createdAt: string;
 }
@@ -80,18 +86,32 @@ export interface LocalManualReactEditJournalEntry {
   readonly targetRevisionId: string;
   readonly receipt: DesignEditReceipt;
   /** Applied entries remain replayable; undone entries retain only inert audit evidence. */
-  readonly lifecycle?: 'applied' | 'undone';
+  readonly lifecycle?: 'applied' | 'undone' | 'abandoned';
   readonly undoResult?: Readonly<{
     readonly workspaceRevisionId: string;
     readonly designRevision: DesignRevision;
     readonly completedAt: string;
   }>;
+  readonly redoResult?: LocalManualReactEditJournalEntry['undoResult'];
   readonly inverse: Readonly<{
     readonly format: 'selene-local-manual-react-edit-inverse/v1';
     readonly patchDigest: string;
     readonly previousContentDigest: string;
     readonly nextContentDigest: string;
   }>;
+}
+
+/** Latest immutable receipt or compensating revision across the retained history. */
+export function manualReactEditHistoryHead(
+  entries: readonly LocalManualReactEditJournalEntry[]
+): DesignRevision | undefined {
+  return entries.reduce<DesignRevision | undefined>((head, entry) => {
+    const revision =
+      entry.redoResult?.designRevision ??
+      entry.undoResult?.designRevision ??
+      entry.receipt.targetRevision;
+    return head === undefined || revision.sequence > head.sequence ? revision : head;
+  }, undefined);
 }
 
 /** Current durable, local-only project record. Network delivery is intentionally absent. */
@@ -192,7 +212,8 @@ export class ProjectLifecycleError extends Error {
       | 'NO_UNDO'
       | 'VERSION_NOT_FOUND'
       | 'PROJECT_QUARANTINED'
-      | 'INVALID_PROJECT',
+      | 'INVALID_PROJECT'
+      | 'GRAPH_CONFLICT',
     message: string
   ) {
     super(message);
@@ -1402,6 +1423,8 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
       summary.kind !== 'set-style' &&
       summary.kind !== 'insert-child' &&
       summary.kind !== 'replace-component' &&
+      summary.kind !== 'remove-node' &&
+      summary.kind !== 'duplicate-node' &&
       summary.kind !== 'reorder-child' &&
       summary.kind !== 'reparent-child') ||
     (summary.count !== 1 && !(summary.kind === 'set-style' && summary.count === 2))
@@ -1418,11 +1441,15 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
             ? 'insert-child'
             : summary.kind === 'replace-component'
               ? 'replace-component'
-              : summary.kind === 'reorder-child'
-                ? 'reorder-child'
-                : summary.kind === 'reparent-child'
-                  ? 'reparent-child'
-                  : 'set-content';
+              : summary.kind === 'duplicate-node'
+                ? 'duplicate-node'
+                : summary.kind === 'remove-node'
+                  ? 'remove-node'
+                  : summary.kind === 'reorder-child'
+                    ? 'reorder-child'
+                    : summary.kind === 'reparent-child'
+                      ? 'reparent-child'
+                      : 'set-content';
   if (
     new Set(remaps.map((entry) => entry.fromSourceAnchorId)).size !== remaps.length ||
     new Set(remaps.map((entry) => entry.toSourceAnchorId)).size !== remaps.length
@@ -1447,6 +1474,8 @@ function manualReactEditReceipt(value: unknown, expectedProjectId: string): Desi
     (summary.count === 2) !== (formatterId === 'selene-tsx-direct-position-v1') ||
     (summary.kind === 'insert-child' ||
       summary.kind === 'replace-component' ||
+      summary.kind === 'remove-node' ||
+      summary.kind === 'duplicate-node' ||
       summary.kind === 'reorder-child' ||
       summary.kind === 'reparent-child') !==
       (formatterId === 'selene-tsx-semantic-structure-v1')
@@ -1517,7 +1546,8 @@ function manualReactEditJournal(
       'receipt',
       'inverse',
       ...(input.lifecycle === undefined ? [] : ['lifecycle']),
-      ...(input.undoResult === undefined ? [] : ['undoResult'])
+      ...(input.undoResult === undefined ? [] : ['undoResult']),
+      ...(input.redoResult === undefined ? [] : ['redoResult'])
     ];
     exactReceiptKeys(input, expectedKeys, 'manual React edit journal entry');
     if (input.format !== 'selene-local-manual-react-edit-journal-entry/v1')
@@ -1547,7 +1577,7 @@ function manualReactEditJournal(
     )
       throw new Error('manual React edit journal receipt mismatch');
     const lifecycle = input.lifecycle ?? 'applied';
-    if (lifecycle !== 'applied' && lifecycle !== 'undone')
+    if (lifecycle !== 'applied' && lifecycle !== 'undone' && lifecycle !== 'abandoned')
       throw new Error('manual React edit journal lifecycle is invalid');
     let undoResult: LocalManualReactEditJournalEntry['undoResult'];
     if (input.undoResult !== undefined) {
@@ -1565,13 +1595,13 @@ function manualReactEditJournal(
       }
       const completedAt = receiptText(result.completedAt, 'manual React edit undo timestamp', 32);
       if (
-        lifecycle !== 'undone' ||
+        (lifecycle === 'applied' && input.redoResult === undefined) ||
         typeof result.workspaceRevisionId !== 'string' ||
         result.workspaceRevisionId.length === 0 ||
         designRevision.projectId !== expectedProjectId ||
         designRevision.revisionId !== result.workspaceRevisionId ||
-        designRevision.parentRevisionId !== receipt.targetRevisionId ||
-        designRevision.sequence !== receipt.targetRevision.sequence + 1 ||
+        designRevision.parentRevisionId === undefined ||
+        designRevision.sequence <= receipt.targetRevision.sequence ||
         designRevision.createdAt !== completedAt ||
         !/^\d{4}-\d{2}-\d{2}T/.test(completedAt) ||
         !Number.isFinite(Date.parse(completedAt))
@@ -1582,8 +1612,38 @@ function manualReactEditJournal(
         designRevision,
         completedAt
       });
-    } else if (lifecycle === 'undone') {
+    } else if (lifecycle !== 'applied') {
       throw new Error('manual React edit undone lifecycle lacks a result');
+    }
+    let redoResult: LocalManualReactEditJournalEntry['redoResult'];
+    if (input.redoResult !== undefined) {
+      const result = record(input.redoResult, 'manual React edit redo result');
+      exactReceiptKeys(
+        result,
+        ['workspaceRevisionId', 'designRevision', 'completedAt'],
+        'manual React edit redo result'
+      );
+      const designRevision = parseDesignRevision(result.designRevision);
+      const completedAt = receiptText(result.completedAt, 'manual React edit redo timestamp', 32);
+      if (
+        lifecycle !== 'applied' ||
+        undoResult === undefined ||
+        typeof result.workspaceRevisionId !== 'string' ||
+        result.workspaceRevisionId.length === 0 ||
+        designRevision.projectId !== expectedProjectId ||
+        designRevision.revisionId !== result.workspaceRevisionId ||
+        designRevision.parentRevisionId === undefined ||
+        designRevision.sequence <= undoResult.designRevision.sequence ||
+        designRevision.createdAt !== completedAt ||
+        !Number.isFinite(Date.parse(completedAt)) ||
+        Date.parse(completedAt) <= Date.parse(undoResult.completedAt)
+      )
+        throw new Error('manual React edit redo result is invalid');
+      redoResult = Object.freeze({
+        workspaceRevisionId: result.workspaceRevisionId,
+        designRevision,
+        completedAt
+      });
     }
     return Object.freeze({
       format: 'selene-local-manual-react-edit-journal-entry/v1' as const,
@@ -1595,6 +1655,7 @@ function manualReactEditJournal(
       receipt,
       lifecycle,
       ...(undoResult === undefined ? {} : { undoResult }),
+      ...(redoResult === undefined ? {} : { redoResult }),
       inverse: Object.freeze({
         format: 'selene-local-manual-react-edit-inverse/v1' as const,
         patchDigest: receiptDigest(inverse.patchDigest, 'manual React edit patch'),
@@ -1632,7 +1693,8 @@ function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPend
       'candidateWorkspace',
       'candidateFingerprint',
       'summary',
-      'createdAt'
+      'createdAt',
+      ...(input.compileEvidence === undefined ? [] : ['compileEvidence'])
     ],
     'pending AI proposal'
   );
@@ -1674,6 +1736,40 @@ function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPend
     fingerprint !== candidateFingerprint
   )
     throw new Error('pending AI proposal workspace identity is invalid');
+  let compileEvidence: ManualReactEditCompilerEvidence | undefined;
+  if (input.compileEvidence !== undefined) {
+    const evidence = record(input.compileEvidence, 'pending AI compilation evidence');
+    exactReceiptKeys(
+      evidence,
+      [
+        'projectId',
+        'sourceRevisionId',
+        'sourceDigest',
+        'bindingDigest',
+        'compilerId',
+        'compilerDigest',
+        'previewDigest'
+      ],
+      'pending AI compilation evidence'
+    );
+    const sourceDigest = receiptDigest(evidence.sourceDigest, 'pending AI compiled source');
+    if (
+      evidence.projectId !== expectedProjectId ||
+      evidence.sourceRevisionId !== candidateWorkspace.revision.id ||
+      sourceDigest !==
+        createHash('sha256').update(serializeCanonicalData(candidateWorkspace)).digest('hex')
+    )
+      throw new Error('pending AI compilation evidence is stale');
+    compileEvidence = Object.freeze({
+      projectId: expectedProjectId,
+      sourceRevisionId: candidateWorkspace.revision.id,
+      sourceDigest,
+      bindingDigest: receiptDigest(evidence.bindingDigest, 'pending AI compiled binding'),
+      compilerId: receiptText(evidence.compilerId, 'pending AI compiler ID', 256),
+      compilerDigest: receiptDigest(evidence.compilerDigest, 'pending AI compiler'),
+      previewDigest: receiptDigest(evidence.previewDigest, 'pending AI compiled preview')
+    });
+  }
   return Object.freeze({
     format: 'selene-local-pending-ai-proposal/v1',
     requestId,
@@ -1683,9 +1779,27 @@ function pendingAIProposal(value: unknown, expectedProjectId: string): LocalPend
     baseFingerprint,
     candidateWorkspace,
     candidateFingerprint,
+    ...(compileEvidence === undefined ? {} : { compileEvidence }),
     summary,
     createdAt
   });
+}
+
+function decodePrototypeGraph(
+  value: unknown,
+  expectedProjectId: string
+): NonNullable<LocalDesignerState['prototypeGraph']> {
+  const input = record(value, 'designerState prototype graph');
+  exactReceiptKeys(input, ['revision', 'graph'], 'designerState prototype graph');
+  const graph = parsePrototypeGraph(input.graph);
+  if (
+    typeof input.revision !== 'number' ||
+    !Number.isSafeInteger(input.revision) ||
+    input.revision < 0 ||
+    graph.project.projectId !== expectedProjectId
+  )
+    throw new Error('designerState prototype graph is invalid');
+  return Object.freeze({ revision: input.revision, graph });
 }
 
 function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDesignerState {
@@ -1727,6 +1841,9 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
     version: 1,
     baseline: structuredClone(canonicalBaseline),
     collaborationSnapshot: serializeSnapshot(collaboration),
+    ...(input.prototypeGraph === undefined
+      ? {}
+      : { prototypeGraph: decodePrototypeGraph(input.prototypeGraph, expectedProjectId) }),
     ...(input.reactBinding === undefined
       ? {}
       : { reactBinding: parseReactBindingManifest(input.reactBinding) }),
@@ -1746,11 +1863,36 @@ function decodeDesignerState(value: unknown, expectedProjectId: string): LocalDe
             expectedProjectId
           )
         }),
+    ...(input.archivedManualReactEditJournal === undefined
+      ? {}
+      : {
+          archivedManualReactEditJournal: manualReactEditJournal(
+            input.archivedManualReactEditJournal,
+            expectedProjectId
+          )
+        }),
     ...(input.pendingAIProposal === undefined
       ? {}
       : { pendingAIProposal: pendingAIProposal(input.pendingAIProposal, expectedProjectId) }),
     ...(input.setup === undefined ? {} : { setup: setupReceipts(input.setup) })
   };
+}
+
+function validateDesignerStateGraphFence(
+  state: LocalDesignerState,
+  current: LocalDesignerState | undefined
+): void {
+  const graph = current?.prototypeGraph;
+  if (
+    graph !== undefined &&
+    (state.prototypeGraph === undefined ||
+      graph.revision !== state.prototypeGraph.revision ||
+      serializeCanonicalData(graph.graph) !== serializeCanonicalData(state.prototypeGraph.graph))
+  )
+    throw new ProjectLifecycleError(
+      'GRAPH_CONFLICT',
+      'The flow graph changed in another workspace. Reload and retry.'
+    );
 }
 
 function validateDesignerStateCurrent(
@@ -1790,13 +1932,31 @@ function validateDesignerStateCurrent(
     authority.designRevision.tuple.sourceDigest !== canonicalWorkspaceDigest
   )
     throw new Error('designerState manual React edit authority is stale for the current workspace');
+  const historyHead = manualReactEditHistoryHead(journal ?? []);
   if (
     journal !== undefined &&
-    (journal.at(-1)?.lifecycle === 'undone'
-      ? journal.at(-1)?.undoResult?.workspaceRevisionId
-      : journal.at(-1)?.targetRevisionId) !== authority.designRevision.revisionId
+    (historyHead?.revisionId !== authority.designRevision.revisionId ||
+      historyHead.revisionCommitment !== authority.designRevision.revisionCommitment)
   )
     throw new Error('designerState manual React edit journal is stale for the current authority');
+  for (const entry of journal ?? []) {
+    for (const result of [entry.undoResult, entry.redoResult]) {
+      if (result === undefined) continue;
+      const revision = collaboration.revisions.find(
+        (candidate) => candidate.id === result.workspaceRevisionId
+      );
+      if (
+        revision === undefined ||
+        revision.parentRevisionId !== result.designRevision.parentRevisionId ||
+        revision.createdAt !== result.completedAt ||
+        result.designRevision.tuple.sourceDigest !==
+          createHash('sha256').update(serializeCanonicalData(revision.content)).digest('hex')
+      )
+        throw new Error(
+          'designerState manual React edit history does not match canonical revisions'
+        );
+    }
+  }
 }
 
 /** v1 had a single committed workspace and optional history but no explicit recovery draft. */
@@ -2300,11 +2460,48 @@ export class LocalProjectLifecycleService {
       );
     });
   }
+  /** One-record CAS commits flow data and its review delta together. */
+  public async commitPrototypeGraph(input: {
+    readonly projectId: string;
+    readonly expectedRevision: number;
+    readonly legacyRevision: number;
+    readonly graph: PrototypeGraph;
+    readonly state: LocalDesignerState;
+  }): Promise<NonNullable<LocalDesignerState['prototypeGraph']>> {
+    return this.withProjectLock(input.projectId, async () => {
+      const current = await this.readRecord(input.projectId);
+      this.assertActive(current);
+      const revision = current.designerState?.prototypeGraph?.revision ?? input.legacyRevision;
+      if (
+        !Number.isSafeInteger(input.expectedRevision) ||
+        input.expectedRevision < 0 ||
+        revision !== input.expectedRevision ||
+        revision >= Number.MAX_SAFE_INTEGER
+      )
+        throw new ProjectLifecycleError(
+          'GRAPH_CONFLICT',
+          'The flow graph changed in another workspace. Reload and retry.'
+        );
+      const graph = decodePrototypeGraph(
+        { revision: revision + 1, graph: input.graph },
+        input.projectId
+      );
+      const designerState = decodeDesignerState(
+        { ...input.state, prototypeGraph: graph },
+        input.projectId
+      );
+      validateDesignerStateCurrent(designerState, current.current);
+      await this.storage.commit(input.projectId, { ...current, designerState });
+      return clone(graph);
+    });
+  }
+
   public async saveDesignerState(id: string, state: LocalDesignerState): Promise<void> {
     await this.withProjectLock(id, async () => {
       const current = await this.readRecord(id);
       this.assertActive(current);
       const designerState = decodeDesignerState(state, id);
+      validateDesignerStateGraphFence(designerState, current.designerState);
       validateDesignerStateCurrent(designerState, current.current);
       const next = { ...current, designerState };
       await this.storage.commit(id, next);
@@ -2324,6 +2521,7 @@ export class LocalProjectLifecycleService {
       const current = await this.readRecord(id);
       this.assertActive(current);
       const designerState = decodeDesignerState(state, id);
+      validateDesignerStateGraphFence(designerState, current.designerState);
       validateDesignerStateCurrent(designerState, current.current);
       const receiptGuidance =
         designerState.setup?.designLanguages ??
@@ -2423,6 +2621,7 @@ export class LocalProjectLifecycleService {
           'lifecycle commit changed the proposed designer revision identity'
         );
       const designerState = decodeDesignerState(state, id);
+      validateDesignerStateGraphFence(designerState, current.designerState);
       validateDesignerStateCurrent(designerState, next.current);
       const canonical = parseSnapshot(designerState.collaborationSnapshot);
       const latest = canonical.revisions.reduce(

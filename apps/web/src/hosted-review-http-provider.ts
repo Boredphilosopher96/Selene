@@ -20,6 +20,13 @@ export interface HostedReviewHttpProviderOptions {
   readonly revisionFingerprint: string;
   readonly screenId: string;
   readonly fetch?: typeof fetch;
+  readonly eventSource?: (url: string) => ReviewEventSource;
+}
+
+export interface ReviewEventSource {
+  addEventListener(type: 'change', listener: (event: MessageEvent<string>) => void): void;
+  addEventListener(type: 'error' | 'open', listener: () => void): void;
+  close(): void;
 }
 
 interface ServiceReviewMessage {
@@ -557,6 +564,38 @@ export function createHostedReviewHttpProvider(
       )
         return conflict(authoritative);
       return { ok: true, thread: authoritative };
+    },
+    subscribe(binding, onChange, onError) {
+      validateHostedReviewBinding(binding);
+      const createSource: (url: string) => ReviewEventSource =
+        options.eventSource ?? ((url: string) => new EventSource(url, { withCredentials: true }));
+      // Do not pin an `after` query value: native EventSource reconnects with
+      // Last-Event-ID, and the service gives an explicit query parameter
+      // precedence over that durable cursor.
+      const url = api(`/v1/projects/${encodeURIComponent(binding.projectId)}/events/stream`);
+      const source = createSource(url);
+      let closed = false;
+      source.addEventListener('open', () => {
+        if (!closed) onChange();
+      });
+      source.addEventListener('change', (event) => {
+        if (closed) return;
+        try {
+          const value = record(JSON.parse(event.data));
+          if (value?.projectId === binding.projectId && value.resourceType === 'review_thread')
+            onChange();
+        } catch {
+          onError?.();
+        }
+      });
+      source.addEventListener('error', () => {
+        if (!closed) onError?.();
+      });
+      return () => {
+        if (closed) return;
+        closed = true;
+        source.close();
+      };
     }
   };
   return Object.freeze(provider);

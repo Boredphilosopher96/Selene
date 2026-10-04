@@ -43,6 +43,7 @@ import { GuidedSetupPanel, type GuidedSetupActions } from './guided-setup-panel'
 import { isCurrentProjectOwner } from './ai-conversation-model';
 import { AIConversationWorkspace } from './ai-conversation-workspace';
 import { ArtboardPreview } from './artboard-preview';
+import { presentCommittedManualEdit } from './manual-edit-presentation';
 import { sourceBackedArtifactGapPixels } from './artifact-auto-layout';
 import { artifactSelectionAnchor } from './artifact-selection-anchor';
 import { adjacentThreadId, selectedThreadIndex } from './comment-thread-navigation';
@@ -66,6 +67,7 @@ import {
 } from './desktop-cockpit-layout';
 import type { PreviewBuild } from './artifact-preview-contracts';
 import './desktop-cockpit.css';
+import './studio-polish.css';
 
 export const inspectorTabs = ['inspect', 'handoff', 'setup'] as const;
 export type InspectorTab = (typeof inspectorTabs)[number];
@@ -140,6 +142,7 @@ export interface DesktopCockpitActions {
   cancelAIChange(requestId: string): Promise<void>;
   undoLastAIChange(input: AIChangeUndoInput): Promise<DesignerSnapshot>;
   undoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
+  redoLatestManualDesignEdit(input: ManualDesignUndoInput): Promise<DesignerSnapshot>;
   mintArtifactSelectionReceipt(
     request: ArtifactSelectionReceiptRequest
   ): Promise<ArtifactSelectionReceipt>;
@@ -900,8 +903,22 @@ export function DesktopCockpit({
       .then(onSnapshot)
       .then(() => message && setGraphSaveStatus(message))
       .catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'canvas')));
+  const presentAuthoringOwner = async (next: DesignerSnapshot): Promise<boolean> => {
+    // Presentation and React Flow own different iframe mounts. A preview
+    // authority registers its selection key only once, so a new document
+    // must not reuse the presentation build's URL. Mount the authoring
+    // owner first, then await a fresh nonce-fenced build and paint receipt.
+    setCanvasMode('design');
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+    if (activeProjectRef.current !== next.source.projectId) return false;
+    await onRender(next, 'authoring');
+    return activeProjectRef.current === next.source.projectId;
+  };
   const enterPrototypeMode = async (mode: 'edit' | 'run'): Promise<boolean> => {
-    if (snapshot.editablePrototype.mode === mode) return true;
+    if (snapshot.editablePrototype.mode === mode && !(mode === 'edit' && canvasMode === 'present'))
+      return true;
     if (
       prototypeModeChangingRef.current ||
       snapshot.prototypeGraphHydration.state === 'recovery-required'
@@ -910,10 +927,16 @@ export function DesktopCockpit({
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus(mode === 'run' ? 'Starting saved prototype…' : 'Opening flow editor…');
+    let authoringRestored = false;
     try {
-      const next = await actions.setPrototypeMode(mode);
+      const next =
+        snapshot.editablePrototype.mode === mode ? snapshot : await actions.setPrototypeMode(mode);
       if (activeProjectRef.current !== next.source.projectId) return false;
       onSnapshot(next);
+      if (mode === 'edit') {
+        authoringRestored = true;
+        if (!(await presentAuthoringOwner(next))) return false;
+      }
       setGraphSaveStatus(
         mode === 'run'
           ? 'Presenting the saved graph on this canvas.'
@@ -921,7 +944,11 @@ export function DesktopCockpit({
       );
       return true;
     } catch (error) {
-      setGraphSaveStatus(presentDesignerError(error, 'canvas'));
+      setGraphSaveStatus(
+        authoringRestored
+          ? 'Editor restored; the preview could not refresh. Use Render to try again.'
+          : presentDesignerError(error, 'canvas')
+      );
       return false;
     } finally {
       prototypeModeChangingRef.current = false;
@@ -955,6 +982,7 @@ export function DesktopCockpit({
   };
   const runCommittedGraph = async (): Promise<boolean> => {
     if (snapshot.prototypeGraphHydration.state === 'recovery-required') {
+      setCanvasMode('design');
       setGraphSaveStatus('Recover the saved graph before presenting it on the canvas.');
       return false;
     }
@@ -962,26 +990,48 @@ export function DesktopCockpit({
       setGraphSaveStatus('Prototype mode is already changing.');
       return false;
     }
+    const projectId = snapshot.source.projectId;
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus('Compiling the committed graph for the live artboard…');
     try {
       const next = await actions.setPrototypeMode('run');
-      if (activeProjectRef.current !== next.source.projectId) return false;
+      if (activeProjectRef.current !== projectId || next.source.projectId !== projectId)
+        return false;
       onSnapshot(next);
       // Inspect selection is authoring-only state. Revalidating it here can
       // reject a valid committed graph after the designer already asked to
       // leave the editor, so presentation waits only for the compiled frame.
       await onRender(next, 'presentation');
+      if (activeProjectRef.current !== projectId) return false;
       setGraphSaveStatus('The live artboard is running the committed graph.');
       return true;
     } catch (error) {
+      // A departed presentation cannot compensate against the new host project.
+      if (activeProjectRef.current !== projectId) return false;
       const message = presentDesignerError(error, 'preview');
       try {
         const rollback = await actions.setPrototypeMode('edit');
-        if (activeProjectRef.current === rollback.source.projectId) onSnapshot(rollback);
+        if (activeProjectRef.current !== projectId || rollback.source.projectId !== projectId)
+          return false;
+        onSnapshot(rollback);
+        try {
+          if (!(await presentAuthoringOwner(rollback))) return false;
+        } catch {
+          if (activeProjectRef.current !== projectId) return false;
+          setGraphSaveStatus(
+            'Editor restored; the preview could not refresh. Use Render to try again.'
+          );
+          return false;
+        }
       } catch {
-        // Keep the original render failure authoritative; the next edit action retries the host.
+        if (activeProjectRef.current !== projectId) return false;
+        // The host may still own run mode. Keep Exit available instead of
+        // claiming that the edit transition or an authoring frame succeeded.
+        setGraphSaveStatus(
+          'Presentation could not start. Return to the editor with Exit to retry.'
+        );
+        return false;
       }
       setGraphSaveStatus(message);
       return false;
@@ -1037,6 +1087,7 @@ export function DesktopCockpit({
     mode: CanvasWorkspaceMode,
     _invoking: HTMLButtonElement
   ): Promise<void> => {
+    if (prototypeModeChangingRef.current) return;
     clearCanvasSelection();
     if (mode === 'present') {
       setSelectedThreadId(undefined);
@@ -1048,13 +1099,17 @@ export function DesktopCockpit({
       // remounted after its ready handshake.
       onCanvasNavigationChange(false);
       setCanvasMode('present');
-      if (!(await runCommittedGraph())) {
-        setCanvasMode('design');
-        onCanvasNavigationChange(true);
-      }
+      // The transition owns its exact outcome: successful edit recovery
+      // mounts the authoring owner, while a refused host rollback retains
+      // presentation and its Exit retry rather than falsely claiming edit.
+      await runCommittedGraph();
       return;
     }
-    if (snapshot.editablePrototype.mode === 'run' && !(await enterPrototypeMode('edit'))) return;
+    if (
+      (canvasMode === 'present' || snapshot.editablePrototype.mode === 'run') &&
+      !(await enterPrototypeMode('edit'))
+    )
+      return;
     setCanvasMode('design');
   };
   const requestAiCanvasTarget = (_invoking: HTMLButtonElement): void => {
@@ -1609,6 +1664,117 @@ export function DesktopCockpit({
       };
     }
   };
+  const removeSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    const request = manualTextEditor.requestManualElementRemoveCapability;
+    const removeApply = manualTextEditor.applyManualElementRemove;
+    if (!request || !removeApply)
+      return { applied: false, message: 'Element removal is unavailable in this desktop host.' };
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry?.nodeId !== input.nodeId
+    )
+      return { applied: false, message: 'The React selection changed. Select it again.' };
+    try {
+      const capability = await request({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message: 'This element cannot be removed safely from React source.'
+        };
+      const result = await removeApply({
+        format: 'selene-desktop-manual-element-remove-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Element was not removed: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        };
+      const outcome = await presentCommittedManualEdit({
+        snapshot: () => manualTextEditor.snapshot(),
+        onSnapshot,
+        clearSelection: onPreviewSelectionClear,
+        render: onRender,
+        successMessage: 'Element removed from React source.',
+        refreshFailureMessage:
+          'Element removed from React source. The preview could not refresh; reload to recover it.'
+      });
+      setManualEditStatus(outcome.message);
+      return outcome;
+    } catch {
+      return {
+        applied: false,
+        message: 'Element removal could not finish. Refresh and try again.'
+      };
+    }
+  };
+  const duplicateSelectedElement = async (input: {
+    readonly nodeId: string;
+    readonly revisionId: string;
+  }): Promise<Readonly<{ applied: boolean; message: string }>> => {
+    const request = manualTextEditor.requestManualElementDuplicateCapability;
+    const duplicateApply = manualTextEditor.applyManualElementDuplicate;
+    if (!request || !duplicateApply)
+      return {
+        applied: false,
+        message: 'Element duplication is unavailable in this desktop host.'
+      };
+    if (
+      canvasMode !== 'design' ||
+      snapshot.source.revision.id !== input.revisionId ||
+      currentPreviewTelemetry?.provenance !== 'authenticated-preview-node' ||
+      currentPreviewTelemetry?.nodeId !== input.nodeId
+    )
+      return { applied: false, message: 'The React selection changed. Select it again.' };
+    try {
+      const capability = await request({
+        projectId: snapshot.source.projectId,
+        nodeId: input.nodeId,
+        revisionId: input.revisionId
+      });
+      if (capability.kind !== 'available')
+        return {
+          applied: false,
+          message: 'This element cannot be duplicated safely from React source.'
+        };
+      const result = await duplicateApply({
+        format: 'selene-desktop-manual-element-duplicate-apply/v1',
+        projectId: snapshot.source.projectId,
+        capabilityId: capability.capabilityId
+      });
+      if (result.kind !== 'applied' && result.kind !== 'replayed')
+        return {
+          applied: false,
+          message: `Element was not duplicated: ${result.diagnostics[0]?.code ?? 'unavailable'}.`
+        };
+      const outcome = await presentCommittedManualEdit({
+        snapshot: () => manualTextEditor.snapshot(),
+        onSnapshot,
+        clearSelection: onPreviewSelectionClear,
+        render: onRender,
+        successMessage: 'Element duplicated from React source.',
+        refreshFailureMessage:
+          'Element duplicated from React source. The preview could not refresh; reload to recover it.'
+      });
+      setManualEditStatus(outcome.message);
+      return outcome;
+    } catch {
+      return {
+        applied: false,
+        message: 'Element duplication could not finish. Refresh and try again.'
+      };
+    }
+  };
   const insertDesignSystemComponent = async (
     entry: CatalogInsertEntry,
     props: Readonly<Record<string, DesignSystemComponentPropertyValue>> | undefined,
@@ -1823,7 +1989,8 @@ export function DesktopCockpit({
               rejectAIProposal: actions.rejectAIProposal,
               cancelAIChange: actions.cancelAIChange,
               undoLastAIChange: actions.undoLastAIChange,
-              undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit
+              undoLatestManualDesignEdit: actions.undoLatestManualDesignEdit,
+              redoLatestManualDesignEdit: actions.redoLatestManualDesignEdit
             }}
             onSnapshot={onSnapshot}
             onRender={onRender}
@@ -1885,6 +2052,7 @@ export function DesktopCockpit({
           }
           saveStatus={graphSaveStatus}
           viewportLayoutKey={`${layoutMode}:${effectiveLeftCollapsed ? 'left-closed' : leftWidth}:${rightCollapsed ? 'right-closed' : rightWidth}`}
+          selectionClearEpoch={previewSelectionClearEpoch ?? 0}
           {...(snapshot.editablePrototype.runtime
             ? { activeNodeId: snapshot.editablePrototype.runtime.activeNodeId }
             : {})}
@@ -1994,6 +2162,8 @@ export function DesktopCockpit({
                 ? { selectedElement: currentPreviewTelemetry }
                 : {})}
               onSelectedElementContextAction={actOnMappedElement}
+              onRemoveSelectedElement={removeSelectedElement}
+              onDuplicateSelectedElement={duplicateSelectedElement}
               onCreateArtifactThread={createArtifactThread}
               onBeginSelectedElementTextEdit={beginSelectedElementTextEdit}
               onUpdateSelectedElementText={updateSelectedElementText}

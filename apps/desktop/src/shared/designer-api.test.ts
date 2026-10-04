@@ -302,7 +302,8 @@ describe('validateManualDesignUndo', () => {
   const valid = {
     projectId: 'desktop-designer',
     undoId: 'undo-manual-edit-1',
-    targetRevisionId: 'manual-revision-2'
+    targetRevisionId: 'manual-revision-2',
+    currentRevisionId: 'manual-revision-2'
   };
 
   it('accepts only the exact bounded receipt identity', () => {
@@ -315,7 +316,11 @@ describe('validateManualDesignUndo', () => {
     );
     expect(() => validateManualDesignUndo({ ...valid, extra: true })).toThrow(/only projectId/);
     const accessor = Object.defineProperty(
-      { undoId: valid.undoId, targetRevisionId: valid.targetRevisionId },
+      {
+        undoId: valid.undoId,
+        targetRevisionId: valid.targetRevisionId,
+        currentRevisionId: valid.currentRevisionId
+      },
       'projectId',
       {
         enumerable: true,

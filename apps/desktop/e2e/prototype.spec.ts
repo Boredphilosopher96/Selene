@@ -6,7 +6,13 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-import { harnessIdentity } from '../../../scripts/playwright-harness.mjs';
+import {
+  assertNativeElectronTestAllowed,
+  harnessIdentity
+} from '../../../scripts/playwright-harness.mjs';
+import { inspectorTabHasUsableGeometry } from '../../../scripts/inspector-tab-geometry.mjs';
+
+test.beforeAll(() => assertNativeElectronTestAllowed());
 
 const mainEntry = fileURLToPath(new URL('../out/main/index.js', import.meta.url));
 const agentFixture = fileURLToPath(new URL('./designer-agent.fixture.mjs', import.meta.url));
@@ -22,6 +28,7 @@ function desktopArgs(userData: string): string[] {
 }
 
 async function electronExecutable(): Promise<string> {
+  assertNativeElectronTestAllowed();
   const electronEntry = require.resolve('electron');
   const electronDirectory = dirname(electronEntry);
   const executable = (await readFile(join(electronDirectory, 'path.txt'), 'utf8')).trim();
@@ -958,6 +965,8 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           const style = getComputedStyle(tab);
           return {
             bottom: rect.bottom,
+            clientHeight: tab.clientHeight,
+            clientWidth: tab.clientWidth,
             height: rect.height,
             label: tab.textContent?.trim(),
             left: rect.left,
@@ -993,16 +1002,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         'Setup'
       ]);
       expect(inspectorTabGeometry.overlaps).toEqual([]);
-      expect(
-        inspectorTabGeometry.tabs.every(
-          (tab) =>
-            tab.visible &&
-            tab.width >= 100 &&
-            tab.height >= 34 &&
-            tab.scrollWidth <= tab.width &&
-            tab.scrollHeight <= tab.height
-        )
-      ).toBe(true);
+      expect(inspectorTabGeometry.tabs.every(inspectorTabHasUsableGeometry)).toBe(true);
       const prototype = window.frameLocator('iframe[title="Generated React preview frame"]');
       const establishDashboardScenario = async () => {
         const dashboard = prototype.getByRole('heading', { name: /dashboard/i });
@@ -2186,17 +2186,33 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         x: nativeMoveBounds.x + 8,
         y: nativeMoveBounds.y + nativeMoveBounds.height / 2
       };
-      const nativeMoveDelta = { x: -31, y: 17 };
+      const siblingAlignmentBounds = await prototype
+        .locator('[data-selene-node-id="designer.summary"]')
+        .boundingBox();
+      const nativeSelectedBounds = await window.locator('.artifact-direct-selection').boundingBox();
+      if (!siblingAlignmentBounds || !nativeSelectedBounds)
+        throw new Error(
+          'Element alignment evidence requires the current mapped sibling and selection.'
+        );
+      // The studio toolbar changes the fitted artifact zoom. Aim at the observed
+      // compiler-mapped sibling, not a physical delta tied to yesterday's chrome.
+      // Keep the vertical leg beyond the pre-drag selection rectangle.
+      const nativeMoveDelta = {
+        x: siblingAlignmentBounds.x - nativeSelectedBounds.x,
+        y: nativeSelectedBounds.height + 8
+      };
       await window.mouse.move(nativeMoveStart.x, nativeMoveStart.y);
       const moveEditStartedAt = Date.now();
       await window.mouse.down();
-      // Continue outside the transparent selected-rect hit plane; this exercises the
-      // native window mouse fallback used when Electron stops React pointer delivery.
-      await window.mouse.move(
-        nativeMoveStart.x + nativeMoveDelta.x,
-        nativeMoveStart.y + nativeMoveDelta.y,
-        { steps: 4 }
+      // Actual window mouse events must complete the edit beyond its initial rectangle.
+      const nativeMoveEndpoint = {
+        x: nativeMoveStart.x + nativeMoveDelta.x,
+        y: nativeMoveStart.y + nativeMoveDelta.y
+      };
+      expect(nativeMoveEndpoint.y).toBeGreaterThan(
+        nativeSelectedBounds.y + nativeSelectedBounds.height
       );
+      await window.mouse.move(nativeMoveEndpoint.x, nativeMoveEndpoint.y, { steps: 4 });
       await expect(manipulationGuides).toHaveAttribute('data-guide-mode', 'move');
       const expectedNativeMove = await manipulationGuides.evaluate((guides) => {
         const x = Number(guides.dataset.moveX);
@@ -2205,9 +2221,24 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
           throw new Error('The active move guides did not expose finite snapped movement.');
         return { x, y };
       });
+      await test.info().attach('manual-native-element-alignment.json', {
+        body: JSON.stringify(
+          {
+            sibling: siblingAlignmentBounds,
+            selection: nativeSelectedBounds,
+            start: nativeMoveStart,
+            delta: nativeMoveDelta,
+            endpoint: nativeMoveEndpoint,
+            committedIntent: expectedNativeMove
+          },
+          null,
+          2
+        ),
+        contentType: 'application/json'
+      });
       await expect(
         manipulationGuides
-          .locator('.artifact-alignment-guide[data-alignment-source="element"]')
+          .locator('.artifact-alignment-guide--vertical[data-alignment-source="element"]')
           .first()
       ).toBeVisible();
       await window.mouse.up();
@@ -2469,16 +2500,28 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         .getByLabel('AI conversation history')
         .locator('[data-status="reviewing"]')
         .filter({ hasText: 'Record the post-baseline update.' });
+      const revisionComposerOrigin = await window.evaluate(() => performance.timeOrigin);
       await postBaselineProposal
         .getByRole('button', {
           name: 'Reject and revise AI proposal: Record the post-baseline update.',
           exact: true
         })
         .click();
+      // The textarea already held this instruction before rejection. Wait for
+      // the real revise/preview transaction to finish before reselecting; a
+      // transient hidden frame must not trigger the helper's reload fallback.
+      await expect(window.locator('.conversation-composer__status')).toHaveText(
+        'Proposal rejected. Edit the saved instruction, then send it as a new request.',
+        { timeout: previewPresentationTimeout }
+      );
       await expect(window.getByLabel('AI change instruction')).toHaveValue(
         'Record the post-baseline update.'
       );
       await selectMappedOrdersAction();
+      expect(await window.evaluate(() => performance.timeOrigin)).toBe(revisionComposerOrigin);
+      await expect(window.getByLabel('AI change instruction')).toHaveValue(
+        'Record the post-baseline update.'
+      );
       await expect(selectedElementActions).toBeVisible();
       await selectedElementActions.getByRole('button', { name: 'Ask AI', exact: true }).click();
       const sendRevisedPostBaselineChange = window.getByRole('button', {
@@ -2606,6 +2649,31 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
       await window.getByRole('tab', { name: 'Inspect', exact: true }).click();
     } catch (error) {
+      const lifecycle = await window
+        .evaluate(async () => {
+          const current = await window.selene.designer.snapshot();
+          return {
+            projectId: current.source.projectId,
+            revision: current.source.revision.id,
+            pendingAIProposal: current.pendingAIProposal && {
+              requestId: current.pendingAIProposal.requestId,
+              candidateRevisionId: current.pendingAIProposal.candidateRevisionId
+            },
+            requests: current.aiChangeRequests.map(({ id, instruction, status }) => ({
+              id,
+              instruction,
+              status
+            })),
+            history: document
+              .querySelector('.conversation-history__requests')
+              ?.textContent?.slice(0, 2000),
+            composer: document.querySelector<HTMLTextAreaElement>(
+              '[aria-label="AI change instruction"]'
+            )?.value
+          };
+        })
+        .catch(() => undefined);
+      diagnostics.push(`final lifecycle: ${JSON.stringify(lifecycle)}`);
       throw failure(error);
     }
   } finally {
@@ -3262,7 +3330,7 @@ test('stages the governed catalog and applies source-backed manual editor operat
     const toneFrame = await previewFrame.getAttribute('src');
     await componentProperties.getByLabel('Tone', { exact: true }).selectOption('primary');
     await componentProperties.getByRole('button', { name: 'Apply Tone', exact: true }).click();
-    await expect(componentProperties.getByRole('status')).toContainText(
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
       'Tone updated in the React artifact.'
     );
     await expect
@@ -3307,6 +3375,124 @@ test('stages the governed catalog and applies source-backed manual editor operat
     await expect
       .poll(() => previewFrame.getAttribute('src'), { timeout: previewPresentationTimeout })
       .not.toBe(appearanceFrame);
+
+    const beforeRemoval = await window.evaluate(async () => window.selene.designer.snapshot());
+    const removedNodeId = await insertedButton.getAttribute('data-selene-node-id');
+    if (!removedNodeId) throw new Error('Inserted component has no stable source identity.');
+    const removePoint = await mapVisiblePreviewPoint(insertedButton, 'remove-catalog-button');
+    await window.mouse.click(removePoint.x, removePoint.y);
+    const removeButton = window
+      .getByRole('toolbar', { name: 'Selected React element actions' })
+      .getByRole('button', { name: 'Remove', exact: true });
+    await expect(removeButton).toBeVisible();
+    window.once('dialog', (dialog) => dialog.dismiss());
+    await removeButton.click();
+    expect((await window.evaluate(async () => window.selene.designer.snapshot())).source).toEqual(
+      beforeRemoval.source
+    );
+    // Fault only presentation after the real source transaction commits.
+    await application.evaluate(({ ipcMain }) => {
+      const handlers: unknown = Reflect.get(ipcMain, '_invokeHandlers');
+      if (!(handlers instanceof Map))
+        throw new Error('Electron invoke handler registry unavailable');
+      const original: unknown = handlers.get('selene:preview-build');
+      if (typeof original !== 'function') throw new Error('Canonical preview handler unavailable');
+      ipcMain.removeHandler('selene:preview-build');
+      ipcMain.handle('selene:preview-build', () => {
+        ipcMain.removeHandler('selene:preview-build');
+        ipcMain.handle('selene:preview-build', (...args) => Reflect.apply(original, ipcMain, args));
+        throw new Error('Native removal presentation failure');
+      });
+      return true;
+    });
+    window.once('dialog', (dialog) => dialog.accept());
+    await removeButton.focus();
+    await removeButton.press('Enter');
+    await expect(window.getByLabel('Manual React edit status')).toContainText(
+      'Element removed from React source. The preview could not refresh'
+    );
+    await expect(
+      window.getByRole('toolbar', { name: 'Selected React element actions' })
+    ).toHaveCount(0);
+    const afterRemoval = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(afterRemoval.source.revision.id).not.toBe(beforeRemoval.source.revision.id);
+    expect(afterRemoval.source.nodes.map((node) => node.nodeId)).not.toContain(removedNodeId);
+    expect(afterRemoval.selectedNodeId).toBeUndefined();
+    expect(afterRemoval.designActivity.at(-1)).toMatchObject({
+      origin: 'manual',
+      kind: 'remove',
+      label: 'Removed React element',
+      status: 'applied'
+    });
+    await window.reload();
+    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    const removalReload = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(removalReload.source.files).toEqual(afterRemoval.source.files);
+    expect(removalReload.selectedNodeId).toBeUndefined();
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    const removalActivity = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="applied"]')
+      .filter({ hasText: 'Removed React element' });
+    await removalActivity.getByRole('button', { name: 'Undo manual change', exact: true }).click();
+    await expect
+      .poll(async () => {
+        const next = await window.evaluate(async () => window.selene.designer.snapshot());
+        return next.designActivity.find((entry) => entry.kind === 'remove')?.status;
+      })
+      .toBe('undone');
+    const restored = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(restored.source.files).toEqual(beforeRemoval.source.files);
+    expect(restored.source.nodes).toEqual(beforeRemoval.source.nodes);
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    await window.reload();
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    const reopened = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(reopened.source.files).toEqual(beforeRemoval.source.files);
+    expect(reopened.source.nodes).toEqual(beforeRemoval.source.nodes);
+    expect(reopened.designActivity.find((entry) => entry.kind === 'remove')?.status).toBe('undone');
+    const reopenedRemoval = window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="undone"]')
+      .filter({ hasText: 'Removed React element' });
+    await window.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    await reopenedRemoval.getByRole('button', { name: 'Redo manual change', exact: true }).click();
+    await expect(insertedButton).toHaveCount(0, { timeout: previewPresentationTimeout });
+    const redone = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(redone.source.files).toEqual(afterRemoval.source.files);
+    expect(redone.selectedNodeId).toBeUndefined();
+    await window
+      .getByLabel('AI conversation history')
+      .locator('[data-status="applied"]')
+      .filter({ hasText: 'Removed React element' })
+      .getByRole('button', { name: 'Undo manual change', exact: true })
+      .click();
+    await expect(insertedButton).toBeVisible({ timeout: previewPresentationTimeout });
+    const secondUndo = await window.evaluate(async () => window.selene.designer.snapshot());
+    expect(secondUndo.source.files).toEqual(beforeRemoval.source.files);
+    const evidencePath = test.info().outputPath('manual-source-history-evidence.json');
+    await writeFile(
+      evidencePath,
+      JSON.stringify(
+        {
+          removedNodeId,
+          beforeRevision: beforeRemoval.source.revision.id,
+          removalRevision: afterRemoval.source.revision.id,
+          removalReloadRevision: removalReload.source.revision.id,
+          previewFailure: true,
+          undoRevision: restored.source.revision.id,
+          reopenedRevision: reopened.source.revision.id,
+          redoRevision: redone.source.revision.id,
+          secondUndoRevision: secondUndo.source.revision.id
+        },
+        null,
+        2
+      )
+    );
+    await test.info().attach('manual-source-history-evidence.json', {
+      path: evidencePath,
+      contentType: 'application/json'
+    });
   } finally {
     await closeElectron(application);
     await rm(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
