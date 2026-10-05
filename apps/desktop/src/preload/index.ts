@@ -43,6 +43,7 @@ import type {
   RecentProject,
   ProjectOpenResult,
   PreviewBuildResult,
+  PreviewBuildLease,
   PreviewBuildTicket,
   ProductShellConfigurationInput,
   ReviewThreadInput,
@@ -509,8 +510,11 @@ contextBridge.exposeInMainWorld('selene', {
       ipcRenderer.invoke(
         'selene:designer:recover-prototype-graph-from-fixture'
       ) as Promise<DesignerSnapshot>,
-    setPrototypeMode: (mode: 'edit' | 'run') =>
-      ipcRenderer.invoke('selene:designer:set-prototype-mode', mode) as Promise<DesignerSnapshot>,
+    setPrototypeMode: (mode: 'edit' | 'run', expectedProjectId?: string) =>
+      ipcRenderer.invoke(
+        'selene:designer:set-prototype-mode',
+        expectedProjectId === undefined ? mode : { mode, projectId: expectedProjectId }
+      ) as Promise<DesignerSnapshot>,
     startPrototypeScenario: (
       request: import('../shared/designer-api').PrototypeScenarioStartInput
     ) =>
@@ -741,8 +745,11 @@ contextBridge.exposeInMainWorld('selene', {
     }
   },
   preview: {
-    build: (ticket: PreviewBuildTicket) =>
-      ipcRenderer.invoke('selene:preview-build', ticket) as Promise<PreviewBuildResult>,
+    reserveBuild: (ticket: PreviewBuildTicket) =>
+      ipcRenderer.invoke('selene:preview-build-reserve', ticket) as Promise<PreviewBuildLease>,
+    cancelBuild: (leaseId: string) => ipcRenderer.send('selene:preview-build-cancel', leaseId),
+    build: (ticket: PreviewBuildTicket, leaseId: string) =>
+      ipcRenderer.invoke('selene:preview-build', ticket, leaseId) as Promise<PreviewBuildResult>,
     buildAIProposal: (input: AIProposalDecisionInput) =>
       ipcRenderer.invoke(
         'selene:preview-build-ai-proposal',

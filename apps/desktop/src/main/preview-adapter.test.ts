@@ -132,6 +132,9 @@ describe('isolated preview transport', () => {
 
   it('uses a nonce CSP and accepts only typed same-origin messages', () => {
     const document = createPreviewDocument(policy, 'r2');
+    expect(document).toContain('<html lang="en"');
+    expect(document).toContain('<title>Selene React preview</title>');
+    expect(document).toContain('name="viewport" content="width=device-width, initial-scale=1"');
     expect(document).toContain("default-src 'none'");
     expect(document).toContain("await import('./preview.js')");
     expect(document).toContain('href="preview.css"');

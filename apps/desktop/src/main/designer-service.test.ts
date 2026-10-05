@@ -917,6 +917,27 @@ function matchedBindingWorkspace(
 }
 
 describe('desktop designer application service', () => {
+  it('bounds transient notices without losing durable design and collaboration history', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const initial = service.snapshot();
+    const initialHandoff = await service.exportHandoff();
+    for (let index = 0; index < 512; index += 1) {
+      service.selectScenario(initial.scenarios[index % initial.scenarios.length]!.id);
+    }
+    const current = service.snapshot();
+    expect(current.activity).toHaveLength(128);
+    expect(current.activity[0]).toBe(`Loaded scenario ${current.selectedScenarioId}.`);
+    expect(current.activity).not.toContain('Validated React workspace is ready for review.');
+    expect(current.source).toEqual(initial.source);
+    expect(current.baseline).toEqual(initial.baseline);
+    expect(current.designActivity).toEqual(initial.designActivity);
+    expect(current.reviewThreads).toEqual(initial.reviewThreads);
+    expect(current.aiChangeRequests).toEqual(initial.aiChangeRequests);
+    expect(current.developerAnnotations).toEqual(initial.developerAnnotations);
+    expect(await service.exportHandoff()).toBe(initialHandoff);
+  });
+
   it('projects the host-owned local portfolio without granting cross-project source access', async () => {
     const persisted = fixtureProjectState();
     const projectState: DesignerProjectStatePort = {
@@ -3582,6 +3603,47 @@ export default function App(){return <PrimaryButton data-selene-node-id="${nodeI
       createdBy: currentAuthorId,
       provider: { providerId: 'fixture-designer' }
     });
+  });
+
+  it('rejects stale project mode transitions before changing runtime, source, or activity', () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const initial = service.snapshot();
+    const running = service.setPrototypeMode({ mode: 'run', projectId: initial.source.projectId });
+    expect(running.editablePrototype.mode).toBe('run');
+    for (const mode of ['run', 'edit']) {
+      expect(() => service.setPrototypeMode({ mode, projectId: 'departed-project' })).toThrow(
+        /no longer active/
+      );
+      expect(service.snapshot()).toEqual(running);
+    }
+    expect(() =>
+      service.setPrototypeMode({ mode: 'edit', projectId: initial.source.projectId, extra: true })
+    ).toThrow(/invalid/);
+    expect(service.snapshot()).toEqual(running);
+    const editing = service.setPrototypeMode({ mode: 'edit', projectId: initial.source.projectId });
+    expect(editing.editablePrototype.mode).toBe('edit');
+    expect(editing.editablePrototype.runtime).toBeUndefined();
+    expect(editing.source).toEqual(initial.source);
+  });
+
+  it('rejects a departed presentation rollback after another host project has opened', async () => {
+    const service = fixtureService();
+    service.registerAgent(new DeterministicDesignerFixtureAdapter());
+    const departed = service.snapshot();
+    service.setPrototypeMode({ mode: 'run', projectId: departed.source.projectId });
+    const chosen = await service.openProjectWorkspace({
+      ...departed.source,
+      projectId: 'new-project'
+    });
+    const beforeLateRollback = service.setPrototypeMode({
+      mode: 'run',
+      projectId: chosen.source.projectId
+    });
+    expect(() =>
+      service.setPrototypeMode({ mode: 'edit', projectId: departed.source.projectId })
+    ).toThrow(/no longer active/);
+    expect(service.snapshot()).toEqual(beforeLateRollback);
   });
 
   it('starts only the exact current graph scenario, preserves it through reset, and rejects stale ownership', async () => {

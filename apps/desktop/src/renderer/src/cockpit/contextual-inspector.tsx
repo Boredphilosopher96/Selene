@@ -1705,25 +1705,8 @@ export function ContextualInspector({
           </>
         ) : (
           <div className="dev-inspector__empty">
-            <span className="dev-inspector__empty-glyph" aria-hidden="true">
-              <StudioIcon name="inspect" />
-            </span>
-            <strong>Explore the details</strong>
-            <p>Click a rendered element on the canvas to inspect its source-backed context.</p>
-            <ul>
-              <li>
-                <StudioIcon name="canvas" />
-                <span>Layout & visual styles</span>
-              </li>
-              <li>
-                <StudioIcon name="shield" />
-                <span>HTML & accessibility metadata</span>
-              </li>
-              <li>
-                <StudioIcon name="sparkles" />
-                <span>React source & AI-ready context</span>
-              </li>
-            </ul>
+            <StudioIcon name="inspect" />
+            <p>Select a rendered element to see its layout, source and editable properties.</p>
           </div>
         )}
       </section>

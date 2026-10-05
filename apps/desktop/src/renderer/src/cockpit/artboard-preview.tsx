@@ -1,4 +1,4 @@
-import { NodeToolbar, Position } from '@xyflow/react';
+import { NodeToolbar, Position, useViewport } from '@xyflow/react';
 import {
   useEffect,
   useLayoutEffect,
@@ -34,6 +34,7 @@ import {
   type ArtifactDimensionConstraints
 } from './artifact-resize';
 import { artifactSpacing } from './artifact-spacing';
+import { threadCardFocusRequest, threadCardPlacement } from './artifact-thread-card-placement';
 import {
   artifactCommentAffordancesVisible,
   formatThreadAuthor,
@@ -41,6 +42,7 @@ import {
 } from './comment-thread-navigation';
 import {
   artifactToolbarScreenPosition,
+  type ArtifactToolbarScreenRect,
   type ArtifactToolbarScreenPosition
 } from './artifact-toolbar-position';
 
@@ -291,53 +293,172 @@ export function ArtifactThreadCard({
   onNavigateThread
 }: ArtifactThreadCardProps) {
   const card = useRef<HTMLElement | null>(null);
+  const handledFocusRequest = useRef<string | undefined>(undefined);
+  const stablePlacement = useRef(false);
+  const viewport = useViewport();
   const [layoutStable, setLayoutStable] = useState(false);
   useLayoutEffect(() => {
+    stablePlacement.current = false;
+    setLayoutStable(false);
+    const element = card.current;
+    const canvas = element?.ownerDocument.querySelector<HTMLElement>('.canvas-workspace');
+    const flow = canvas?.querySelector<HTMLElement>('.react-flow');
+    if (!element || !canvas || !flow) return;
+    const owner = element.ownerDocument.defaultView;
+    if (!owner) return;
     let frame = 0;
+    let disposed = false;
     let stableFrames = 0;
+    let offsetX = 0;
+    let offsetY = 0;
     let previous:
       Readonly<{ left: number; top: number; right: number; bottom: number }> | undefined;
-    setLayoutStable(false);
-    const waitForStableCanvasPlacement = () => {
-      const element = card.current;
-      const canvas = element?.ownerDocument.querySelector<HTMLElement>('.canvas-workspace');
-      if (!element || !canvas) {
-        frame = requestAnimationFrame(waitForStableCanvasPlacement);
-        return;
-      }
+    element.style.translate = '0px 0px';
+    element.style.maxWidth = '';
+    element.style.maxHeight = '';
+    let cssMaximumHeight = Number.parseFloat(owner.getComputedStyle(element).maxHeight);
+    const measure = () => {
+      frame = 0;
+      if (disposed || !element.isConnected) return;
       const bounds = element.getBoundingClientRect();
       const canvasBounds = canvas.getBoundingClientRect();
-      const next = {
-        left: bounds.left,
-        top: bounds.top,
-        right: bounds.right,
-        bottom: bounds.bottom
-      } as const;
-      const isWithinCanvas =
-        next.left >= canvasBounds.left &&
-        next.top >= canvasBounds.top &&
-        next.right <= canvasBounds.right &&
-        next.bottom <= canvasBounds.bottom;
-      const isStable =
+      const flowBounds = flow.getBoundingClientRect();
+      // The conversation lives in the usable flow plane, away from the
+      // workspace's toolbar and footer. It remains inside the canvas too.
+      const usable = {
+        left: Math.max(canvasBounds.left, flowBounds.left),
+        top: Math.max(canvasBounds.top, flowBounds.top),
+        width:
+          Math.min(canvasBounds.right, flowBounds.right) -
+          Math.max(canvasBounds.left, flowBounds.left),
+        height:
+          Math.min(canvasBounds.bottom, flowBounds.bottom) -
+          Math.max(canvasBounds.top, flowBounds.top)
+      };
+      const placement = threadCardPlacement(bounds, usable, {
+        width: owner.innerWidth,
+        height: owner.innerHeight
+      });
+      if (placement === undefined) {
+        stablePlacement.current = false;
+        setLayoutStable(false);
+        return;
+      }
+      const maximumHeight = Number.isFinite(cssMaximumHeight)
+        ? Math.min(cssMaximumHeight, placement.maxHeight)
+        : placement.maxHeight;
+      const maxWidth = `${placement.maxWidth}px`;
+      const maxHeight = `${maximumHeight}px`;
+      const resized = element.style.maxWidth !== maxWidth || element.style.maxHeight !== maxHeight;
+      if (resized) {
+        element.style.maxWidth = maxWidth;
+        element.style.maxHeight = maxHeight;
+      }
+      offsetX += placement.offsetX;
+      offsetY += placement.offsetY;
+      element.style.translate = `${offsetX}px ${offsetY}px`;
+      const next = element.getBoundingClientRect();
+      const visible = placement.visibleCanvas;
+      const contained =
+        next.left >= visible.left &&
+        next.top >= visible.top &&
+        next.right <= visible.left + visible.width &&
+        next.bottom <= visible.top + visible.height;
+      const stable =
+        !resized &&
         previous !== undefined &&
         Math.abs(previous.left - next.left) < 0.5 &&
         Math.abs(previous.top - next.top) < 0.5 &&
         Math.abs(previous.right - next.right) < 0.5 &&
         Math.abs(previous.bottom - next.bottom) < 0.5;
-      previous = next;
-      stableFrames = isWithinCanvas && isStable ? stableFrames + 1 : 0;
+      previous = { left: next.left, top: next.top, right: next.right, bottom: next.bottom };
+      stableFrames = contained && stable ? stableFrames + 1 : 0;
       if (stableFrames >= 2) {
+        stablePlacement.current = true;
         setLayoutStable(true);
         return;
       }
-      frame = requestAnimationFrame(waitForStableCanvasPlacement);
+      stablePlacement.current = false;
+      setLayoutStable(false);
+      frame = owner.requestAnimationFrame(measure);
     };
-    frame = requestAnimationFrame(waitForStableCanvasPlacement);
-    return () => cancelAnimationFrame(frame);
-  }, [selectedThread.id]);
-  useEffect(() => {
-    requestAnimationFrame(() => card.current?.querySelector<HTMLButtonElement>('button')?.focus());
-  }, [focusRequest, selectedThread]);
+    const schedule = () => {
+      if (disposed) return;
+      stablePlacement.current = false;
+      stableFrames = 0;
+      previous = undefined;
+      setLayoutStable(false);
+      if (frame === 0) frame = owner.requestAnimationFrame(measure);
+    };
+    const windowResize = () => {
+      // Release a prior narrow viewport limit before sampling the current
+      // stylesheet's natural height cap. ResizeObserver alone must not do
+      // this repeatedly, because applying the new limit also resizes us.
+      element.style.maxHeight = '';
+      cssMaximumHeight = Number.parseFloat(owner.getComputedStyle(element).maxHeight);
+      schedule();
+    };
+    const scroll = (event: Event) => {
+      // Scrolling a draft or message inside the card does not move its outer
+      // placement and must not hide/refocus an ongoing conversation.
+      if (event.target instanceof Node && element.contains(event.target)) return;
+      schedule();
+    };
+    // NodeToolbar moves independently when its artboard is dragged. Observe
+    // only this card's portal-owner style, never the document or iframe.
+    const movement = new MutationObserver(schedule);
+    if (element.parentElement)
+      movement.observe(element.parentElement, { attributes: true, attributeFilter: ['style'] });
+    const resize = new ResizeObserver(schedule);
+    resize.observe(element);
+    resize.observe(canvas);
+    resize.observe(flow);
+    owner.addEventListener('resize', windowResize);
+    owner.addEventListener('scroll', scroll, true);
+    owner.visualViewport?.addEventListener('resize', windowResize);
+    owner.visualViewport?.addEventListener('scroll', scroll);
+    schedule();
+    return () => {
+      disposed = true;
+      stablePlacement.current = false;
+      if (frame !== 0) owner.cancelAnimationFrame(frame);
+      resize.disconnect();
+      movement.disconnect();
+      owner.removeEventListener('resize', windowResize);
+      owner.removeEventListener('scroll', scroll, true);
+      owner.visualViewport?.removeEventListener('resize', windowResize);
+      owner.visualViewport?.removeEventListener('scroll', scroll);
+    };
+  }, [selectedThread.id, focusRequest, viewport.x, viewport.y, viewport.zoom]);
+  useLayoutEffect(() => {
+    const element = card.current;
+    if (
+      !layoutStable ||
+      !stablePlacement.current ||
+      !element ||
+      !element.isConnected ||
+      element.closest('[inert]') ||
+      getComputedStyle(element).visibility !== 'visible'
+    )
+      return;
+    const active = element.ownerDocument.activeElement;
+    const editing =
+      active instanceof HTMLElement &&
+      (active.matches('input, textarea, [contenteditable="true"]') || active.isContentEditable);
+    const focus = threadCardFocusRequest(
+      selectedThread.id,
+      focusRequest,
+      handledFocusRequest.current,
+      editing
+    );
+    if (focus.focus) {
+      const control = element.querySelector<HTMLButtonElement>('button:not(:disabled)');
+      if (!control) return;
+      control.focus({ preventScroll: true });
+      if (element.ownerDocument.activeElement !== control) return;
+    }
+    handledFocusRequest.current = focus.key;
+  }, [layoutStable, selectedThread.id, focusRequest, inert]);
   const submitReplyShortcut = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
       event.defaultPrevented ||
@@ -357,6 +478,7 @@ export function ArtifactThreadCard({
   return (
     <aside
       className="spatial-thread-card"
+      style={{ minWidth: 0, gridTemplateColumns: 'minmax(0, 1fr)', overflowWrap: 'anywhere' }}
       data-layout-stable={layoutStable || undefined}
       ref={card}
       role="dialog"
@@ -366,10 +488,15 @@ export function ArtifactThreadCard({
       onPointerDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
     >
-      <header className="spatial-thread-card__header">
-        <span className="spatial-thread-card__identity">
-          <b aria-hidden="true">#{threadIndex + 1}</b>
-          <span>
+      <header className="spatial-thread-card__header" style={{ minWidth: 0, flexWrap: 'wrap' }}>
+        <span
+          className="spatial-thread-card__identity"
+          style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: '1 1 160px' }}
+        >
+          <b aria-hidden="true" style={{ flexShrink: 0 }}>
+            #{threadIndex + 1}
+          </b>
+          <span style={{ minWidth: 0 }}>
             <strong>
               {selectedThread.status === 'resolved' ? 'Resolved review' : 'Stakeholder review'}
             </strong>
@@ -380,7 +507,18 @@ export function ArtifactThreadCard({
             </small>
           </span>
         </span>
-        <span className="spatial-thread-card__header-actions">
+        <span
+          className="spatial-thread-card__header-actions"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'flex-end',
+            gap: 6,
+            minWidth: 0,
+            maxWidth: '100%',
+            flex: '0 0 auto'
+          }}
+        >
           <button
             type="button"
             aria-label={selectedThread.status === 'resolved' ? 'Reopen' : 'Resolve'}
@@ -582,6 +720,12 @@ export function ArtboardPreview({
   const [commentStatus, setCommentStatus] = useState<string>();
   const directSelection = useRef<HTMLDivElement>(null);
   const directToolbar = useRef<HTMLDivElement>(null);
+  // Display-only recent geometry, scoped to the exact preview identity. This
+  // cannot authorize a selection; it only keeps a previously selected neighbor exposed.
+  const recentToolbarSelections = useRef({
+    owner: '',
+    rectangles: new Map<string, ArtifactToolbarScreenRect>()
+  });
   const threadDraft = useRef<HTMLDivElement>(null);
   const [directToolbarPortal, setDirectToolbarPortal] = useState<HTMLElement>();
   const [directToolbarPosition, setDirectToolbarPosition] = useState<
@@ -1491,6 +1635,36 @@ export function ArtboardPreview({
       const toolbarBounds = toolbar.getBoundingClientRect();
       const canvasBounds = directToolbarPortal.getBoundingClientRect();
       const selectionBounds = selection.getBoundingClientRect();
+      const currentFrame = frame.current;
+      const frameBounds = currentFrame?.getBoundingClientRect();
+      const owner = `${build?.url}:${build?.revisionId}:${build?.policy?.nonce}:${currentFrame?.clientWidth}:${currentFrame?.clientHeight}`;
+      if (recentToolbarSelections.current.owner !== owner)
+        recentToolbarSelections.current = { owner, rectangles: new Map() };
+      const remembered = recentToolbarSelections.current.rectangles;
+      const avoid: ArtifactToolbarScreenRect[] = [];
+      if (frameBounds && frameBounds.width > 0 && frameBounds.height > 0) {
+        for (const [nodeId, rect] of remembered) {
+          if (nodeId === selectedElement.nodeId) continue;
+          avoid.push({
+            left: frameBounds.left + rect.left * frameBounds.width,
+            top: frameBounds.top + rect.top * frameBounds.height,
+            right: frameBounds.left + rect.right * frameBounds.width,
+            bottom: frameBounds.top + rect.bottom * frameBounds.height,
+            width: rect.width * frameBounds.width,
+            height: rect.height * frameBounds.height
+          });
+        }
+        remembered.delete(selectedElement.nodeId);
+        remembered.set(selectedElement.nodeId, {
+          left: (selectionBounds.left - frameBounds.left) / frameBounds.width,
+          top: (selectionBounds.top - frameBounds.top) / frameBounds.height,
+          right: (selectionBounds.right - frameBounds.left) / frameBounds.width,
+          bottom: (selectionBounds.bottom - frameBounds.top) / frameBounds.height,
+          width: selectionBounds.width / frameBounds.width,
+          height: selectionBounds.height / frameBounds.height
+        });
+        if (remembered.size > 4) remembered.delete(remembered.keys().next().value!);
+      }
       const viewportLeft = Math.max(0, canvasBounds.left);
       const viewportTop = Math.max(0, canvasBounds.top);
       const viewportRight = Math.min(window.innerWidth, canvasBounds.right);
@@ -1505,7 +1679,10 @@ export function ArtboardPreview({
           bottom: viewportBottom,
           width: Math.max(0, viewportRight - viewportLeft),
           height: Math.max(0, viewportBottom - viewportTop)
-        }
+        },
+        8,
+        'side',
+        avoid
       );
       const next = {
         key: directToolbarPositionKey,

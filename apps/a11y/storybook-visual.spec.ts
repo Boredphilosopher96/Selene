@@ -342,7 +342,13 @@ for (const story of cockpitStories) {
           throw new Error('Missing conversation rail allocation targets.');
         const bounds = (element: HTMLElement) => {
           const rect = element.getBoundingClientRect();
-          return { top: rect.top, bottom: rect.bottom, height: rect.height };
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+            left: rect.left,
+            right: rect.right
+          };
         };
         return {
           layout: bounds(layout),
@@ -352,6 +358,12 @@ for (const story of cockpitStories) {
           composer: bounds(composer),
           railClientHeight: rail.clientHeight,
           railScrollHeight: rail.scrollHeight,
+          railClientWidth: rail.clientWidth,
+          railScrollWidth: rail.scrollWidth,
+          bodyClientWidth: body.clientWidth,
+          bodyScrollWidth: body.scrollWidth,
+          bodyOverflowY: getComputedStyle(body).overflowY,
+          historyEmpty: history.hasAttribute('data-empty'),
           historyOverflowY: getComputedStyle(history).overflowY,
           composerOverflowY: getComputedStyle(composer).overflowY
         };
@@ -366,12 +378,119 @@ for (const story of cockpitStories) {
       expect(railAllocation.history.top).toBeGreaterThanOrEqual(railAllocation.body.top);
       expect(railAllocation.history.bottom).toBeLessThanOrEqual(railAllocation.composer.top);
       expect(railAllocation.composer.bottom).toBeLessThanOrEqual(railAllocation.body.bottom);
-      // Equal 1fr tracks can differ only by fractional CSS-pixel layout rounding.
-      expect(
-        Math.abs(railAllocation.history.height - railAllocation.composer.height)
-      ).toBeLessThanOrEqual(0.5);
-      expect(railAllocation.historyOverflowY).toBe('auto');
-      expect(railAllocation.composerOverflowY).toBe('auto');
+      // Studio history and composer have independent tracks. The rail body owns
+      // scrolling; both panels must remain bounded and their controls reachable.
+      expect(railAllocation.railScrollWidth).toBeLessThanOrEqual(
+        railAllocation.railClientWidth + 1
+      );
+      expect(railAllocation.bodyScrollWidth).toBeLessThanOrEqual(
+        railAllocation.bodyClientWidth + 1
+      );
+      expect(railAllocation.history.height).toBeGreaterThanOrEqual(
+        railAllocation.historyEmpty ? 1 : 100
+      );
+      expect(railAllocation.composer.height).toBeGreaterThan(0);
+      expect(railAllocation.bodyOverflowY).toBe('auto');
+      expect(railAllocation.historyOverflowY).toBe(
+        railAllocation.historyEmpty ? 'visible' : 'auto'
+      );
+      expect(railAllocation.composerOverflowY).toBe('visible');
+      const agent = page.getByRole('combobox', { name: 'Configured agent', exact: true });
+      const instruction = page.getByRole('textbox', { name: 'AI change instruction', exact: true });
+      const selectTarget = page.getByRole('button', { name: 'Select on canvas', exact: true });
+      const railBody = page.locator('.conversation-rail__body');
+      const readProbeScrollState = () =>
+        railBody.evaluate((body) => {
+          const history = body.querySelector<HTMLElement>('.conversation-history');
+          if (history === null) throw new Error('Missing conversation history scroll owner.');
+          return {
+            scrollTop: body.scrollTop,
+            scrollLeft: body.scrollLeft,
+            historyScrollTop: history.scrollTop,
+            historyScrollLeft: history.scrollLeft
+          };
+        });
+      const beforeProbe = await readProbeScrollState();
+      const focusedBeforeProbe = await page.evaluateHandle(() => document.activeElement);
+      try {
+        await [agent, instruction, selectTarget].reduce(async (previous, control) => {
+          await previous;
+          await expect(control).toBeVisible();
+          await expect(control).toBeEnabled();
+          await expect
+            .poll(async () => {
+              await page.keyboard.press('Tab');
+              return control.evaluate((element) => document.activeElement === element);
+            })
+            .toBe(true);
+          await expect(control).toBeFocused();
+          const reachability = await control.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2
+            );
+            return {
+              top: bounds.top,
+              bottom: bounds.bottom,
+              left: bounds.left,
+              right: bounds.right,
+              height: bounds.height,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight,
+              hit: hit !== null && (hit === element || element.contains(hit))
+            };
+          });
+          expect(reachability.height).toBeGreaterThanOrEqual(34);
+          expect(reachability.left).toBeGreaterThanOrEqual(0);
+          expect(reachability.left).toBeGreaterThanOrEqual(railAllocation.rail.left);
+          expect(reachability.right).toBeLessThanOrEqual(railAllocation.rail.right);
+          expect(reachability.right).toBeLessThanOrEqual(reachability.viewportWidth);
+          expect(reachability.top).toBeGreaterThanOrEqual(railAllocation.rail.top);
+          expect(reachability.bottom).toBeLessThanOrEqual(railAllocation.rail.bottom);
+          expect(reachability.bottom).toBeLessThanOrEqual(reachability.viewportHeight);
+          expect(reachability.hit).toBe(true);
+          if (control === instruction) {
+            expect(reachability.height).toBeGreaterThanOrEqual(64);
+            const originalInstruction = await instruction.inputValue();
+            try {
+              await instruction.press('ControlOrMeta+A');
+              await instruction.pressSequentially('Verify the current Orders layout.');
+              await expect(instruction).toHaveValue('Verify the current Orders layout.');
+            } finally {
+              await instruction.press('ControlOrMeta+A');
+              await instruction.press('Backspace');
+              if (originalInstruction !== '')
+                await instruction.pressSequentially(originalInstruction);
+              await expect(instruction).toHaveValue(originalInstruction);
+            }
+          }
+        }, Promise.resolve());
+      } finally {
+        try {
+          await focusedBeforeProbe.evaluate((element) => {
+            if (!(element instanceof HTMLElement))
+              throw new Error('The rail probe lost its original keyboard-focus target.');
+            element.focus({ preventScroll: true });
+          });
+          await railBody.evaluate((body, previous) => {
+            const history = body.querySelector<HTMLElement>('.conversation-history');
+            if (history === null) throw new Error('Missing conversation history scroll owner.');
+            history.scrollTop = previous.historyScrollTop;
+            history.scrollLeft = previous.historyScrollLeft;
+            body.scrollTop = previous.scrollTop;
+            body.scrollLeft = previous.scrollLeft;
+          }, beforeProbe);
+          await expect.poll(readProbeScrollState).toEqual(beforeProbe);
+          await expect
+            .poll(() =>
+              focusedBeforeProbe.evaluate((element) => document.activeElement === element)
+            )
+            .toBe(true);
+        } finally {
+          await focusedBeforeProbe.dispose();
+        }
+      }
     }
     const ordersHeadingBox = await ordersFrame
       .getByRole('heading', { name: 'Orders', exact: true })
@@ -634,7 +753,7 @@ for (const story of cockpitStories) {
       );
       expect(initialEvidence.styles.conversationRail.overflowY).toBe('clip');
       expect(initialEvidence.styles.conversationHistory.overflowY).toBe('auto');
-      expect(initialEvidence.styles.conversationComposer.overflowY).toBe('auto');
+      expect(initialEvidence.styles.conversationComposer.overflowY).toBe('visible');
       expect(initialEvidence.styles.inspector.overflowY).toBe('auto');
       expect(initialEvidence.geometry.stage.top).toBeGreaterThanOrEqual(0);
       expect(initialEvidence.geometry.stage.bottom).toBeLessThanOrEqual(
@@ -718,13 +837,17 @@ test('catalog drag intent never invents a React insertion target', async ({ page
 
 test('component inventory is a dedicated workspace, not the product prototype', async ({
   page
-}) => {
+}, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.goto(
     `${harnessUrl(ports.visualStorybook)}/iframe.html?id=desktop-cockpit--fitted-artifact`
   );
   const workspace = page.getByRole('main', { name: 'Fixture desktop designer' });
   await expect(workspace).toBeVisible({ timeout: coldCockpitStoryDiscoveryTimeoutMs });
+  const graphStatus = page.locator('.canvas-workspace__status');
+  await expect(graphStatus).toBeVisible();
+  const currentGraphNotice = await graphStatus.textContent();
+  expect(currentGraphNotice?.trim()).toBeTruthy();
   await page.getByRole('button', { name: 'Components', exact: true }).click();
 
   const explorer = page.getByRole('region', {
@@ -734,6 +857,19 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   await expect(explorer).toBeVisible();
   await expect(explorer.getByRole('heading', { name: 'Components', exact: true })).toBeVisible();
   await expect(page.locator('.react-flow')).toBeHidden();
+  await expect(page.locator('.canvas-workspace__footer')).toHaveCount(0);
+  await expect(graphStatus).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Canvas navigation' })).toHaveCount(0);
+  // Component feedback belongs to its workspace. Returning to Design restores
+  // the same graph notice and usable canvas controls without a graph mutation.
+  await page.getByRole('button', { name: 'Design', exact: true }).click();
+  await expect(page.locator('.react-flow')).toBeVisible();
+  await expect(graphStatus).toBeVisible();
+  await expect(graphStatus).toHaveText(currentGraphNotice!);
+  await expect(page.getByRole('toolbar', { name: 'Canvas navigation' })).toBeVisible();
+  await page.getByRole('button', { name: 'Components', exact: true }).click();
+  await expect(explorer).toBeVisible();
+  await expect(page.locator('.canvas-workspace__footer')).toHaveCount(0);
   const teamComponent = explorer.getByRole('button', {
     name: /OrderStatus.*Team component/
   });
@@ -753,6 +889,29 @@ test('component inventory is a dedicated workspace, not the product prototype', 
   await expect(explorer.getByRole('list', { name: 'Button screen usage' })).toContainText(
     '/checkout'
   );
+  await testInfo.attach('component-mode-surface-geometry.json', {
+    body: JSON.stringify(
+      await explorer.evaluate((element) => {
+        const canvasWorkspace = element.closest('.canvas-workspace');
+        const layout = element.closest('.workspace-layout');
+        const toolbar = canvasWorkspace?.querySelector('.canvas-workspace__toolbar');
+        const centerStage = element.closest('.workspace-center-stage');
+        return {
+          explorer: element.getBoundingClientRect().toJSON(),
+          workspace: canvasWorkspace?.getBoundingClientRect().toJSON(),
+          toolbar: toolbar?.getBoundingClientRect().toJSON(),
+          layoutGap: layout ? getComputedStyle(layout).gap : null,
+          centerStage: centerStage?.getBoundingClientRect().toJSON(),
+          centerStagePadding: centerStage ? getComputedStyle(centerStage).padding : null,
+          toolbarPadding: toolbar ? getComputedStyle(toolbar).padding : null,
+          canvasStatusCount: canvasWorkspace?.querySelectorAll('.canvas-workspace__status').length
+        };
+      }),
+      null,
+      2
+    ),
+    contentType: 'application/json'
+  });
   await expect(explorer).toHaveScreenshot('component-explorer-wide.png', {
     animations: 'disabled',
     caret: 'hide'
@@ -760,6 +919,9 @@ test('component inventory is a dedicated workspace, not the product prototype', 
 
   await explorer.getByRole('button', { name: 'Use in design', exact: true }).click();
   await expect(page.locator('.react-flow')).toBeVisible();
+  await expect(graphStatus).toBeVisible();
+  await expect(graphStatus).toHaveText(currentGraphNotice!);
+  await expect(page.getByRole('toolbar', { name: 'Canvas navigation' })).toBeVisible();
   const assets = page.locator('.canvas-workspace__assets');
   await expect(assets.getByRole('searchbox', { name: 'Search components' })).toHaveValue('Button');
   await expect(assets.locator('li[data-catalog-component="Button"]')).toBeVisible();

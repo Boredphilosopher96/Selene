@@ -475,6 +475,26 @@ export interface PreviewBuildResult {
   };
 }
 
+/** One-shot, expiring host reservation made before sending the canonical build IPC. */
+export interface PreviewBuildLease {
+  readonly leaseId: string;
+}
+
+export function validatePrototypeModeChange(value: unknown): {
+  readonly mode: 'edit' | 'run';
+  readonly projectId: string;
+} {
+  const input = record(value, 'prototype mode change');
+  if (
+    Object.keys(input).sort().join('\u0000') !== ['mode', 'projectId'].join('\u0000') ||
+    (input.mode !== 'edit' && input.mode !== 'run') ||
+    typeof input.projectId !== 'string' ||
+    !/^[a-z][a-z0-9-]{0,63}$/.test(input.projectId)
+  )
+    throw new Error('prototype mode change is invalid');
+  return Object.freeze({ mode: input.mode, projectId: input.projectId });
+}
+
 export function validatePreviewBuildTicket(value: unknown): PreviewBuildTicket {
   const input = record(value, 'preview build ticket');
   const expected = ['bindingId', 'format', 'graphRevision', 'projectId', 'sourceRevisionId'];

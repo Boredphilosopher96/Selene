@@ -1,3 +1,7 @@
+import {
+  starterPrototypeGraphForWorkspace,
+  starterScenariosForWorkspace
+} from './starter-workspace';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, extname, isAbsolute } from 'node:path';
 import * as ts from '@selene/tsx-compiler-api';
@@ -116,6 +120,7 @@ import {
   validateDesignerPublish,
   validateDesignerPublishConsent,
   validatePrototypeRunAction,
+  validatePrototypeModeChange,
   validatePrototypeScenarioStart,
   validateProductShellConfiguration,
   validateReviewThread,
@@ -971,16 +976,31 @@ function desktopAnchor(
   };
 }
 
+function workspaceScenarios(
+  workspace: ReactSourceWorkspace,
+  graph?: PrototypeGraph
+): readonly EnterpriseScenario[] {
+  return starterScenariosForWorkspace(workspace, graph) ?? enterpriseScenarioFixtures;
+}
+
 function currentAnchor(
-  source: ReactSourceWorkspace
+  source: ReactSourceWorkspace,
+  graph?: PrototypeGraph
 ): DesignerSnapshot['reviewThreads'][number]['anchor'] {
+  const starterScenarios = starterScenariosForWorkspace(source, graph);
+  const scenarios = starterScenarios ?? enterpriseScenarioFixtures;
   return {
     x: 0,
     y: 0,
     artifactId: source.projectId,
-    screenId: 'desktop-designer',
-    scenarioId: enterpriseScenarioFixtures[0]?.id ?? 'owner-loading-desktop',
-    state: enterpriseScenarioFixtures[0]?.state ?? 'default',
+    screenId:
+      starterScenarios === undefined
+        ? 'desktop-designer'
+        : graph?.project.projectId === source.projectId
+          ? graph.initialNodeId
+          : starterPrototypeGraphForWorkspace(source)!.initialNodeId,
+    scenarioId: scenarios[0]?.id ?? 'owner-loading-desktop',
+    state: scenarios[0]?.state ?? 'default',
     revisionId: source.revision.id,
     viewport: { width: 1, height: 1 },
     nodeRef: 'designer.root'
@@ -1359,6 +1379,8 @@ const editablePrototype = parsePrototypeGraph({
  * recovery condition, not a migration.
  */
 function freshPrototypeGraphForWorkspace(workspace: ReactSourceWorkspace) {
+  const starterGraph = starterPrototypeGraphForWorkspace(workspace);
+  if (starterGraph !== undefined) return starterGraph;
   return parsePrototypeGraph({
     ...editablePrototype,
     project: { ...editablePrototype.project, projectId: workspace.projectId },
@@ -1636,7 +1658,18 @@ export class DesktopDesignerApplicationService {
       createdAt: '2026-07-24T00:00:00.000Z'
     }
   ];
+  // Transient operator notices are separate from durable design/collaboration history.
+  // Bound them at insertion so long sessions do not grow every IPC snapshot or rollback.
+  private static readonly maximumActivityNotices = 128;
   private readonly activity: string[] = ['Validated React workspace is ready for review.'];
+
+  private recordActivity(message: string): void {
+    this.activity.unshift(message);
+    this.activity.length = Math.min(
+      this.activity.length,
+      DesktopDesignerApplicationService.maximumActivityNotices
+    );
+  }
   private source = createInitialWorkspace();
   private baseline = initialBaseline(this.source.projectId);
   /** Canonical collaboration data is retained verbatim; desktop arrays are projections only. */
@@ -3826,10 +3859,10 @@ export class DesktopDesignerApplicationService {
   }
 
   /** Source-proven catalog target; computed preview CSS is never insertion authority. */
-  private selectedCatalogInsertTarget():
-    Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined {
+  private selectedCatalogInsertTarget(
+    context: ReturnType<DesktopDesignerApplicationService['manualMappedEditContext']>
+  ): Readonly<{ nodeId: string; layout: 'flex' | 'grid' }> | undefined {
     if (this.selectedNodeId === undefined) return undefined;
-    const context = this.manualMappedEditContext(this.selectedNodeId);
     if (context === undefined) return undefined;
     if (!ts.isJsxElement(context.element)) return undefined;
     const display = currentManualLayoutValues(context.element)?.display;
@@ -3838,11 +3871,11 @@ export class DesktopDesignerApplicationService {
       : undefined;
   }
 
-  private selectedCatalogReplaceTarget(): Readonly<{ nodeId: string }> | undefined {
+  private selectedCatalogReplaceTarget(
+    context: ReturnType<DesktopDesignerApplicationService['manualMappedEditContext']>
+  ): Readonly<{ nodeId: string }> | undefined {
     if (this.selectedNodeId === undefined) return undefined;
-    return this.manualMappedEditContext(this.selectedNodeId) === undefined
-      ? undefined
-      : Object.freeze({ nodeId: this.selectedNodeId });
+    return context === undefined ? undefined : Object.freeze({ nodeId: this.selectedNodeId });
   }
 
   private manualLayoutProposal(nodeId: string):
@@ -4540,7 +4573,7 @@ export class DesktopDesignerApplicationService {
       ],
       designReviewState: toCollaborationDesignReviewState(this.baseline)
     });
-    this.activity.unshift('Applied a durable manual React design edit.');
+    this.recordActivity('Applied a durable manual React design edit.');
   }
 
   /**
@@ -5973,7 +6006,7 @@ export class DesktopDesignerApplicationService {
     // The lifecycle never persists compiler output. A reopened manifest remains
     // inert until the preview host has produced a fresh matched build receipt.
     this.revokeReactBindingAuthority();
-    this.activity.unshift('Saved React binding requires a fresh host build receipt.');
+    this.recordActivity('Saved React binding requires a fresh host build receipt.');
   }
 
   private previewBuildTicket(): PreviewBuildTicket {
@@ -6108,7 +6141,7 @@ export class DesktopDesignerApplicationService {
         const receipt = artifact.receipt;
         if (receipt === undefined || artifact.diagnostics.length !== 0) {
           if (candidate === undefined) {
-            this.activity.unshift(
+            this.recordActivity(
               'No persisted React binding is available for this compiled workspace.'
             );
             return { status: 'unavailable' as const };
@@ -6118,7 +6151,7 @@ export class DesktopDesignerApplicationService {
         const outputSha256 = digestReactBuildOutput(artifact);
         if (receipt.outputSha256 !== outputSha256) {
           if (candidate === undefined) {
-            this.activity.unshift(
+            this.recordActivity(
               'No persisted React binding is available for this compiled workspace.'
             );
             return { status: 'unavailable' as const };
@@ -6139,7 +6172,7 @@ export class DesktopDesignerApplicationService {
           });
         } catch (error) {
           if (candidate !== undefined) throw error;
-          this.activity.unshift(
+          this.recordActivity(
             'No persisted React binding is available for this compiled workspace.'
           );
           return { status: 'unavailable' as const };
@@ -6152,7 +6185,7 @@ export class DesktopDesignerApplicationService {
         if (candidate === undefined) {
           await this.persistProjectState();
           this.lastActivatedBuildArtifact = artifact;
-          this.activity.unshift(
+          this.recordActivity(
             'Activated compiler-backed editing and target authority for the current React workspace.'
           );
           return { status: 'activated' as const };
@@ -6166,7 +6199,7 @@ export class DesktopDesignerApplicationService {
         this.pendingReactBinding = undefined;
         await this.persistProjectState();
         this.lastActivatedBuildArtifact = artifact;
-        this.activity.unshift('Activated React binding from the current host build receipt.');
+        this.recordActivity('Activated React binding from the current host build receipt.');
         return { status: 'activated' as const };
       })
     );
@@ -6511,7 +6544,7 @@ export class DesktopDesignerApplicationService {
           projectId: workspace.projectId
         };
         this.selectedNodeId = undefined;
-        this.selectedScenarioId = enterpriseScenarioFixtures[0]?.id ?? '';
+        this.selectedScenarioId = workspaceScenarios(workspace)[0]?.id ?? '';
         this.graphMode = 'edit';
         this.prototypeRuntime = undefined;
         await this.hydrateProjectState(workspace.projectId);
@@ -6521,12 +6554,15 @@ export class DesktopDesignerApplicationService {
           // Portfolio context is informative and must not make an otherwise
           // healthy local project impossible to open.
           this.productMap = undefined;
-          this.activity.unshift('Local project portfolio status is temporarily unavailable.');
+          this.recordActivity('Local project portfolio status is temporarily unavailable.');
         }
         // Hydration has just loaded an inert persisted binding. Keep it only
         // through this same-project graph reload so host evidence can validate
         // the complete authority tuple before any activation.
         await this.hydratePrototypeGraphUnlocked(true);
+        const scenarios = workspaceScenarios(this.source, this.graph);
+        if (!scenarios.some((scenario) => scenario.id === this.selectedScenarioId))
+          this.selectedScenarioId = scenarios[0]?.id ?? '';
         this.revalidateReactBindingAfterGraphHydration();
         const migratedScenarioMetadata = this.ensureCurrentCollaborationScenarioMetadata();
         this.pendingProjectStateMigration ||= migratedScenarioMetadata;
@@ -6534,7 +6570,7 @@ export class DesktopDesignerApplicationService {
           await this.persistProjectState();
           this.pendingProjectStateMigration = false;
         }
-        this.activity.unshift(`Opened lifecycle project ${workspace.projectId}.`);
+        this.recordActivity(`Opened lifecycle project ${workspace.projectId}.`);
         return this.snapshot();
       } catch (error) {
         this.source = prior.source;
@@ -6568,7 +6604,7 @@ export class DesktopDesignerApplicationService {
         this.productMap = prior.productMap;
         this.designInputProvenance = prior.designInputProvenance;
         this.activity.splice(0, this.activity.length, ...prior.activity);
-        this.activity.unshift(
+        this.recordActivity(
           `Project persistence recovery is required: ${error instanceof Error ? error.message : 'unknown error.'}`
         );
         throw error;
@@ -6607,7 +6643,7 @@ export class DesktopDesignerApplicationService {
         this.graph = saved.graph;
         this.graphRevision = saved.revision;
         this.graphHydration = { state: 'persisted' };
-        this.activity.unshift(`Hydrated saved flow graph revision ${saved.revision}.`);
+        this.recordActivity(`Hydrated saved flow graph revision ${saved.revision}.`);
         return this.graphHydration;
       }
       this.graph =
@@ -6616,7 +6652,7 @@ export class DesktopDesignerApplicationService {
           : freshPrototypeGraphForWorkspace(this.source);
       this.graphRevision = preservePendingBinding ? (this.pendingPersistedGraph?.revision ?? 0) : 0;
       this.graphHydration = { state: 'missing' };
-      this.activity.unshift(
+      this.recordActivity(
         'No saved flow graph exists; initialized the local fixture at revision 0.'
       );
       return this.graphHydration;
@@ -6631,7 +6667,7 @@ export class DesktopDesignerApplicationService {
           ? { recovery: { recoveryId: error.recoveryId } }
           : {})
       };
-      this.activity.unshift(`Saved flow graph needs recovery. ${message}`);
+      this.recordActivity(`Saved flow graph needs recovery. ${message}`);
       return this.graphHydration;
     }
   }
@@ -6797,8 +6833,14 @@ export class DesktopDesignerApplicationService {
         ? { ...request, status: 'reviewing' as const }
         : request
     );
-    const catalogInsertTarget = this.selectedCatalogInsertTarget();
-    const catalogReplaceTarget = this.selectedCatalogReplaceTarget();
+    // Both projections use the same freshly checked authority and parsed TSX.
+    // Keep this context local to the snapshot; no capability survives a revision change.
+    const selectedCatalogContext =
+      this.selectedNodeId === undefined
+        ? undefined
+        : this.manualMappedEditContext(this.selectedNodeId);
+    const catalogInsertTarget = this.selectedCatalogInsertTarget(selectedCatalogContext);
+    const catalogReplaceTarget = this.selectedCatalogReplaceTarget(selectedCatalogContext);
     return structuredClone({
       apiVersion: DESIGNER_API_VERSION,
       agents: [...this.agents.values()].map((agent) => agent.descriptor),
@@ -6824,7 +6866,7 @@ export class DesktopDesignerApplicationService {
             })
           }),
       developerAnnotations: projected.developerAnnotations,
-      scenarios: enterpriseScenarioFixtures,
+      scenarios: workspaceScenarios(this.source, this.graph),
       selectedScenarioId: this.selectedScenarioId,
       baseline: projected.baseline,
       prototype: { flow: prototypeFlow, currentScreenId: 'dashboard' },
@@ -6858,16 +6900,16 @@ export class DesktopDesignerApplicationService {
     const id = validateDesignerIdentifier(value, 'agentId');
     if (!this.agents.has(id)) throw new DesignerApplicationError(`unknown agent: ${id}`);
     this.selectedAgentId = id;
-    this.activity.unshift(`Selected ${id}.`);
+    this.recordActivity(`Selected ${id}.`);
     return this.snapshot();
   }
 
   public selectScenario(value: unknown): DesignerSnapshot {
     const id = validateDesignerIdentifier(value, 'scenarioId');
-    if (!enterpriseScenarioFixtures.some((scenario) => scenario.id === id))
+    if (!workspaceScenarios(this.source, this.graph).some((scenario) => scenario.id === id))
       throw new DesignerApplicationError(`unknown scenario: ${id}`);
     this.selectedScenarioId = id;
-    this.activity.unshift(`Loaded scenario ${id}.`);
+    this.recordActivity(`Loaded scenario ${id}.`);
     return this.snapshot();
   }
 
@@ -6986,7 +7028,7 @@ export class DesktopDesignerApplicationService {
       this.graphHydration = { state: 'persisted' };
       this.prototypeRuntime = undefined;
       if (this.graphPersistence.commitsDesignerState !== true) await this.persistProjectState();
-      this.activity.unshift(`Saved flow graph revision ${this.graphRevision}.`);
+      this.recordActivity(`Saved flow graph revision ${this.graphRevision}.`);
       return this.snapshot();
     });
   }
@@ -7044,7 +7086,7 @@ export class DesktopDesignerApplicationService {
         recovery: result.receipt
       };
       if (this.graphPersistence.commitsDesignerState !== true) await this.persistProjectState();
-      this.activity.unshift(
+      this.recordActivity(
         `Recovered the fixture at revision ${result.saved.revision}; preserved ${result.receipt.recoveryId}.`
       );
       return this.snapshot();
@@ -7052,11 +7094,19 @@ export class DesktopDesignerApplicationService {
   }
 
   public setPrototypeMode(value: unknown): DesignerSnapshot {
-    if (value !== 'edit' && value !== 'run')
+    const request =
+      typeof value === 'string' ? { mode: value } : validatePrototypeModeChange(value);
+    if ('projectId' in request && request.projectId !== this.source.projectId)
+      throw new DesignerApplicationError(
+        'Prototype mode change belongs to a project that is no longer active.'
+      );
+    if (request.mode !== 'edit' && request.mode !== 'run')
       throw new DesignerApplicationError('prototype mode is invalid');
-    this.graphMode = value;
-    this.prototypeRuntime = value === 'run' ? new PrototypeRuntime(this.graph) : undefined;
-    this.activity.unshift(`${value === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`);
+    this.graphMode = request.mode;
+    this.prototypeRuntime = request.mode === 'run' ? new PrototypeRuntime(this.graph) : undefined;
+    this.recordActivity(
+      `${request.mode === 'run' ? 'Running' : 'Editing'} the host-owned flow graph.`
+    );
     return this.snapshot();
   }
   /** Starts a declared graph scenario; node selection remains flow-owned by PrototypeRuntime. */
@@ -7078,7 +7128,7 @@ export class DesktopDesignerApplicationService {
       const runtime = new PrototypeRuntime(this.graph, request.scenarioId);
       this.graphMode = 'run';
       this.prototypeRuntime = runtime;
-      this.activity.unshift(`Started saved graph scenario ${request.scenarioId}.`);
+      this.recordActivity(`Started saved graph scenario ${request.scenarioId}.`);
       return this.snapshot();
     });
   }
@@ -7118,7 +7168,9 @@ export class DesktopDesignerApplicationService {
           ? activeNode.id
           : this.graph.initialNodeId;
     const scenarioId = runtime?.scenarioId ?? this.selectedScenarioId;
-    const scenario = enterpriseScenarioFixtures.find((item) => item.id === scenarioId);
+    const scenario = workspaceScenarios(this.source, this.graph).find(
+      (item) => item.id === scenarioId
+    );
     return {
       screenId,
       scenarioId,
@@ -7368,7 +7420,7 @@ export class DesktopDesignerApplicationService {
         }
         operation.status = 'succeeded';
         operation.receipt = receipt;
-        this.activity.unshift(
+        this.recordActivity(
           receipt.mode === 'github-remote'
             ? receipt.hostedReview.collaboration.status === 'ready'
               ? `Remote publish ${receipt.immutableId} completed with stakeholder review ready.`
@@ -7431,7 +7483,9 @@ export class DesktopDesignerApplicationService {
         const runtimeScenarioId = this.prototypeRuntime?.snapshot().scenarioId;
         const scenarioIsCurrent =
           runtimeScenarioId === undefined
-            ? enterpriseScenarioFixtures.some((scenario) => scenario.id === artifact.scenarioId)
+            ? workspaceScenarios(this.source, this.graph).some(
+                (scenario) => scenario.id === artifact.scenarioId
+              )
             : this.graph.scenarios.some((scenario) => scenario.id === artifact.scenarioId);
         if (
           currentRevision === undefined ||
@@ -7462,7 +7516,7 @@ export class DesktopDesignerApplicationService {
             revisionId: this.source.revision.id
           }
         });
-        this.activity.unshift('Added a compiler-bound discussion thread.');
+        this.recordActivity('Added a compiler-bound discussion thread.');
         this.appendCanonicalReview(this.reviewThreads.at(-1)!, compilerTarget);
         await this.persistProjectState();
         return this.snapshot();
@@ -7507,7 +7561,7 @@ export class DesktopDesignerApplicationService {
               };
             })
           });
-        this.activity.unshift(
+        this.recordActivity(
           `${request.resolved ? 'Resolved' : 'Reopened'} artifact discussion ${request.id}.`
         );
         await this.persistProjectState();
@@ -7554,7 +7608,7 @@ export class DesktopDesignerApplicationService {
                 }
           )
         });
-        this.activity.unshift(`Replied to artifact discussion ${request.id}.`);
+        this.recordActivity(`Replied to artifact discussion ${request.id}.`);
         await this.persistProjectState();
         return this.snapshot();
       })
@@ -7594,7 +7648,7 @@ export class DesktopDesignerApplicationService {
             {
               id: saved.id,
               projectId: this.source.projectId,
-              anchor: this.canonicalAnchor(currentAnchor(this.source)),
+              anchor: this.canonicalAnchor(currentAnchor(this.source, this.graph)),
               category,
               body: saved.body,
               createdBy: this.collaborationAuthorId,
@@ -7613,7 +7667,7 @@ export class DesktopDesignerApplicationService {
             )
           )
         });
-        this.activity.unshift(`Added ${annotation.category} developer annotation.`);
+        this.recordActivity(`Added ${annotation.category} developer annotation.`);
         await this.persistProjectState();
         return this.snapshot();
       })
@@ -7681,7 +7735,7 @@ export class DesktopDesignerApplicationService {
         const selected = this.agents.get(input.agentId);
         if (selected === undefined)
           throw new DesignerApplicationError(`unknown agent: ${input.agentId}`);
-        const selectedScenario = enterpriseScenarioFixtures.find(
+        const selectedScenario = workspaceScenarios(this.source, this.graph).find(
           (item) => item.id === this.selectedScenarioId
         );
         if (selectedScenario === undefined)
@@ -7852,7 +7906,7 @@ export class DesktopDesignerApplicationService {
           });
           this.updateRequest(id, { status: 'reviewing' });
           await this.persistProjectState();
-          this.activity.unshift(`Staged ${candidateWorkspace.revision.id}: ${patch.summary}`);
+          this.recordActivity(`Staged ${candidateWorkspace.revision.id}: ${patch.summary}`);
           this.emit({
             requestId: id,
             agentId: input.agentId,
@@ -8022,7 +8076,7 @@ export class DesktopDesignerApplicationService {
           resultingRevisionId: revision.id
         });
         await this.persistAppliedRevision();
-        this.activity.unshift(`Accepted ${revision.id}: ${proposal.summary}`);
+        this.recordActivity(`Accepted ${revision.id}: ${proposal.summary}`);
         return this.snapshot();
       })
     );
@@ -8046,7 +8100,7 @@ export class DesktopDesignerApplicationService {
         });
         this.updateRequest(input.requestId, { status: 'cancelled' });
         await this.persistProjectState();
-        this.activity.unshift(`Rejected AI proposal ${input.requestId}.`);
+        this.recordActivity(`Rejected AI proposal ${input.requestId}.`);
         return this.snapshot();
       })
     );
@@ -8289,7 +8343,7 @@ export class DesktopDesignerApplicationService {
           this.manualReactEditJournal = journal;
           this.revokeReactBindingAuthority();
           this.pendingReactBinding = undefined;
-          this.activity.unshift(
+          this.recordActivity(
             `${operation === 'undo' ? 'Undid' : 'Redid'} a manual design edit with a compiled revision.`
           );
           return this.snapshot();
@@ -8464,7 +8518,7 @@ export class DesktopDesignerApplicationService {
             });
             this.updateRequest(request.id, { status: 'undone', resultingRevisionId: revision.id });
             await this.persistAppliedRevision();
-            this.activity.unshift(`Undid AI request ${request.id} with ${revision.id}.`);
+            this.recordActivity(`Undid AI request ${request.id} with ${revision.id}.`);
             return this.snapshot();
           } catch (error) {
             this.restoreMutationState(beforeUndo);
@@ -8504,7 +8558,7 @@ export class DesktopDesignerApplicationService {
         input.projectId,
         input.childProjectIds
       );
-      this.activity.unshift(
+      this.recordActivity(
         input.childProjectIds.length === 0
           ? `Removed product shell membership from ${input.projectId}.`
           : `Configured ${input.projectId} as a product shell with ${input.childProjectIds.length} child projects.`
@@ -8541,7 +8595,7 @@ export class DesktopDesignerApplicationService {
             createdBy: this.collaborationAuthorId
           }
         });
-        this.activity.unshift(`Marked ${this.source.revision.id} ready for ${intent}.`);
+        this.recordActivity(`Marked ${this.source.revision.id} ready for ${intent}.`);
         this.updateCanonicalBaseline();
         await this.persistProjectState();
         return this.snapshot();
@@ -8672,6 +8726,47 @@ export class DeterministicDesignerFixtureAdapter implements DesignerAgentAdapter
     input.progress(`Using ${input.scenario.title}.`);
     await Promise.resolve();
     if (input.signal.aborted) throw new DOMException('Request cancelled', 'AbortError');
+    const starterGraph = starterPrototypeGraphForWorkspace(input.workspace);
+    if (
+      starterGraph === undefined &&
+      (input.scenario.brand === 'Starter' ||
+        input.workspace.nodes.some((node) => node.nodeId === 'starter.fixture-note'))
+    )
+      throw new DesignerApplicationError(
+        'This starter declaration changed. Configure an agent to revise it; the demo agent will not replace your design.'
+      );
+    if (starterGraph !== undefined) {
+      input.progress(
+        'Demo agent: preserving the starter and adding your request as a preview note.'
+      );
+      const dataFile = input.workspace.files.find((file) => file.path === 'src/preview-data.json')!;
+      const data = JSON.parse(dataFile.content) as Record<string, unknown>;
+      return {
+        summary:
+          'Demo agent added your request as a preview note. Configure an agent for design generation.',
+        operations: [
+          {
+            type: 'write',
+            path: dataFile.path,
+            content: `${JSON.stringify({ ...data, fixtureNote: `Demo request: ${input.instruction}` }, null, 2)}\n`
+          }
+        ]
+      };
+    }
+    // The legacy whole-fixture patch belongs only to its exact authored App.
+    // A custom/configured source is never recognized by copied node IDs alone.
+    if (
+      input.workspace.entrypoint !== 'src/App.tsx' ||
+      !input.workspace.files.some(
+        (file) =>
+          file.path === 'src/App.tsx' &&
+          file.language === 'tsx' &&
+          file.content === previewAppSource
+      )
+    )
+      throw new DesignerApplicationError(
+        'Configure an agent to revise custom React source; the demo agent will not replace your design.'
+      );
     return {
       summary: `Fixture agent revised the design for ${input.scenario.id}.`,
       operations: [

@@ -18,6 +18,8 @@ export interface BoundPreviewBuildIdentity {
 export interface BoundPreviewBuildRequest {
   readonly identity: BoundPreviewBuildIdentity;
   readonly workspace: ReactSourceWorkspace;
+  /** Revalidate a live host lease immediately before any artifact may be retained. */
+  readonly assertActive?: () => void;
 }
 
 interface PreparedBuild extends BoundPreviewBuildRequest {
@@ -34,7 +36,10 @@ interface InFlightBuild {
 
 export interface BoundPreviewBuildCoordinatorOptions {
   readonly maximumRetainedArtifacts?: number;
+  readonly compileTimeoutMs?: number;
 }
+
+export const DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS = 10_000;
 
 const sha256Pattern = /^[a-f0-9]{64}$/;
 
@@ -68,6 +73,7 @@ function immutableArtifact(artifact: ReactBuildArtifact): ReactBuildArtifact {
  */
 export class BoundPreviewBuildCoordinator {
   private readonly maximumRetainedArtifacts: number;
+  private readonly compileTimeoutMs: number;
   private readonly retained = new Map<string, ReactBuildArtifact>();
   private readonly inFlight = new Map<string, InFlightBuild>();
 
@@ -79,6 +85,14 @@ export class BoundPreviewBuildCoordinator {
     if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 64)
       throw new Error('Bound preview artifact limit must be between 1 and 64.');
     this.maximumRetainedArtifacts = maximum;
+    const timeoutMs = options.compileTimeoutMs ?? DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS;
+    if (
+      !Number.isSafeInteger(timeoutMs) ||
+      timeoutMs < 1 ||
+      timeoutMs > DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS
+    )
+      throw new Error('Bound preview compile timeout must be between 1 and 10000 milliseconds.');
+    this.compileTimeoutMs = timeoutMs;
   }
 
   public async build(
@@ -87,13 +101,21 @@ export class BoundPreviewBuildCoordinator {
   ): Promise<ReactBuildArtifact> {
     const prepared = this.prepare(request);
     if (signal?.aborted) throw abortError('Bound preview build was cancelled before compilation.');
+    request.assertActive?.();
     const retained = this.retained.get(prepared.key);
     if (retained !== undefined) {
       this.retained.delete(prepared.key);
       this.retained.set(prepared.key, retained);
       return retained;
     }
-    return this.join(this.inFlight.get(prepared.key) ?? this.start(prepared), signal);
+    const artifact = await this.join(
+      this.inFlight.get(prepared.key) ?? this.start(prepared),
+      signal
+    );
+    if (signal?.aborted) throw abortError('Bound preview build was cancelled after compilation.');
+    request.assertActive?.();
+    if (artifact.diagnostics.length === 0) this.retain(prepared.key, artifact);
+    return artifact;
   }
 
   public clear(): void {
@@ -144,17 +166,32 @@ export class BoundPreviewBuildCoordinator {
       waiters: 0,
       settled: false
     };
-    flight.promise = this.compiler
-      .compile(prepared.workspace, controller.signal)
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let removeAbortListener: () => void = () => undefined;
+    flight.promise = new Promise<ReactBuildArtifact>((resolve, reject) => {
+      const abandon = () =>
+        reject(abortError('Bound preview compilation timed out or was cancelled.'));
+      controller.signal.addEventListener('abort', abandon, { once: true });
+      removeAbortListener = () => controller.signal.removeEventListener('abort', abandon);
+      timer = setTimeout(() => controller.abort(), this.compileTimeoutMs);
+      try {
+        // Attach both handlers even if the adapter ignores abort; a late error
+        // is consumed and a late artifact can never enter the retained cache.
+        void this.compiler.compile(prepared.workspace, controller.signal).then(resolve, reject);
+      } catch (error) {
+        reject(error);
+      }
+    })
       .then((artifact) => {
         if (controller.signal.aborted) throw abortError('Bound preview compilation was cancelled.');
         if (artifact.revisionId !== prepared.identity.sourceRevisionId)
           throw new Error('Bound preview compiler returned a different source revision.');
         const immutable = immutableArtifact(artifact);
-        if (immutable.diagnostics.length === 0) this.retain(prepared.key, immutable);
         return immutable;
       })
       .finally(() => {
+        clearTimeout(timer);
+        removeAbortListener();
         flight.settled = true;
         if (this.inFlight.get(prepared.key) === flight) this.inFlight.delete(prepared.key);
       });
@@ -183,6 +220,7 @@ export class BoundPreviewBuildCoordinator {
       const onAbort = (): void =>
         finish(() => reject(abortError('Bound preview build caller was cancelled.')));
       signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) onAbort();
       flight.promise.then(
         (artifact) => finish(() => resolve(artifact)),
         (error: unknown) => finish(() => reject(error))

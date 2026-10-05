@@ -738,7 +738,7 @@ test.describe('Storybook accessibility', () => {
       id: 'desktop-project-launchpad--empty-first-run',
       name: 'desktop project launchpad empty state',
       target: { role: 'main' as const, name: 'Electron project launchpad' },
-      ready: { role: 'status' as const, text: 'No local projects yet.' }
+      ready: { role: 'status' as const, text: 'Projects are stored locally.' }
     },
     {
       id: 'desktop-project-launchpad--loading-recent',

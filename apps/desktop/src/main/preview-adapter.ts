@@ -237,8 +237,8 @@ export function createPreviewDocument(
   const project = projectId === undefined ? '' : encodedAttribute(projectId);
   const proofBootstrap = createSelectionProofBootstrap(canonical);
   return `<!doctype html>
-<html data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}${projectId === undefined ? '' : ` data-preview-project-id="${project}"`}>
-<head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
+<html lang="en" data-preview-origin="${origin}" data-preview-nonce="${nonce}" data-preview-revision-id="${revision}"${screenId === undefined ? '' : ` data-preview-screen-id="${screen}"`}${projectId === undefined ? '' : ` data-preview-project-id="${project}"`}>
+<head><meta charset="utf-8"><title>Selene React preview</title><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${canonical.csp}"><link rel="stylesheet" href="preview.css"></head>
 <body>${proofBootstrap}<div id="root"></div><script type="module" nonce="${canonical.nonce}">
 const root=document.documentElement;const decode=value=>decodeURIComponent(value||'');
 const policy=Object.freeze({origin:decode(root.dataset.previewOrigin),nonce:decode(root.dataset.previewNonce),revisionId:decode(root.dataset.previewRevisionId)});let previewCommitted=false;let pendingRuntimeState;let pendingInspectNodeId;const dispatchRuntimeState=state=>dispatchWindow(new TrustedCustomEvent('selene-runtime-state',{detail:state}));

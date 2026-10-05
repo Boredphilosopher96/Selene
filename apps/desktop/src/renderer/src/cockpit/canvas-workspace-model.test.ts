@@ -7,10 +7,34 @@ import {
   catalogEntryCanDrag,
   catalogInsertAvailability,
   catalogInsertTarget,
-  projectGraphEdges
+  projectGraphEdges,
+  reciprocalEdgeLabelOffsets
 } from './canvas-workspace-model';
 
 describe('canvas workspace interaction model', () => {
+  it('separates reciprocal label plates deterministically without modifying wires', () => {
+    const edges = Object.freeze([
+      Object.freeze({ id: 'next', source: 'dashboard', target: 'orders' }),
+      Object.freeze({ id: 'back', source: 'orders', target: 'dashboard' })
+    ]);
+    const offsets = reciprocalEdgeLabelOffsets(edges);
+    expect(offsets.get('next')).toBe(-22);
+    expect(offsets.get('back')).toBe(22);
+    expect(reciprocalEdgeLabelOffsets([...edges].reverse()).get('next')).toBe(-22);
+    expect(edges).toEqual([
+      { id: 'next', source: 'dashboard', target: 'orders' },
+      { id: 'back', source: 'orders', target: 'dashboard' }
+    ]);
+  });
+
+  it('does not shift single, same-direction or self-loop labels', () => {
+    const edge = { id: 'next', source: 'dashboard', target: 'orders' };
+    expect(reciprocalEdgeLabelOffsets([edge]).get('next')).toBe(0);
+    expect(reciprocalEdgeLabelOffsets([edge, { ...edge, id: 'parallel' }]).get('next')).toBe(0);
+    const loop = { id: 'self', source: 'dashboard', target: 'dashboard' };
+    expect(reciprocalEdgeLabelOffsets([loop]).get('self')).toBe(0);
+  });
+
   it('refreshes only changed semantics for a surviving selected connection', () => {
     const previous = {
       projectFence: 'project-a:graph-a',

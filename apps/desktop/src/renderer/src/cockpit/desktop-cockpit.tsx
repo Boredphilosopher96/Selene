@@ -66,6 +66,7 @@ import {
   inspectorDrawerBlocksInteraction
 } from './desktop-cockpit-layout';
 import type { PreviewBuild } from './artifact-preview-contracts';
+import { StudioIcon } from './studio-icon';
 import './desktop-cockpit.css';
 import './studio-polish.css';
 
@@ -155,7 +156,7 @@ export interface DesktopCockpitActions {
   ): Promise<DesignerSnapshot>;
   retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
   recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
-  setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+  setPrototypeMode(mode: 'edit' | 'run', expectedProjectId?: string): Promise<DesignerSnapshot>;
   startPrototypeScenario(request: PrototypeScenarioStartInput): Promise<DesignerSnapshot>;
   resetPrototypeRun(): Promise<DesignerSnapshot>;
 }
@@ -180,8 +181,11 @@ export interface DesktopCockpitProps {
   readonly onSnapshot: (snapshot: DesignerSnapshot) => void;
   readonly onRender: (
     snapshot: DesignerSnapshot,
-    intent?: 'authoring' | 'presentation'
+    intent?: 'authoring' | 'presentation',
+    signal?: AbortSignal
   ) => Promise<void>;
+  /** Current App ownership changes before a newer project has finished compiling. */
+  readonly isCurrentProjectOwner?: (projectId: string) => boolean;
   readonly onPreviewAIProposal: (input: AIProposalDecisionInput) => Promise<void>;
   readonly onPreviewCurrentRevision: () => Promise<void>;
   readonly onBuildStoryPreview?: (
@@ -229,6 +233,7 @@ export function DesktopCockpit({
   onFrameError,
   onSnapshot,
   onRender,
+  isCurrentProjectOwner: hostOwnsProject = () => true,
   onPreviewAIProposal,
   onPreviewCurrentRevision,
   onBuildStoryPreview,
@@ -281,6 +286,13 @@ export function DesktopCockpit({
       readonly projectId: string;
     }[]
   >([]);
+  // IPC snapshots clone the graph even when only selection or a notice changes.
+  // Descriptors are bound to compiled screens, not graph object identity or layout.
+  const referenceScreenKey = JSON.stringify(
+    snapshot.editablePrototype.graph.nodes
+      .filter((node) => node.kind === 'screen' || node.kind === 'page')
+      .map((node) => node.id)
+  );
   useEffect(() => {
     let disposed = false;
     const previewBuild = build;
@@ -292,9 +304,7 @@ export function DesktopCockpit({
       };
     }
     const fence = `${snapshot.source.projectId}:${previewBuild.revisionId}:${previewPolicy.nonce}`;
-    const nodeIds = snapshot.editablePrototype.graph.nodes
-      .filter((node) => node.kind === 'screen' || node.kind === 'page')
-      .map((node) => node.id);
+    const nodeIds = JSON.parse(referenceScreenKey) as string[];
     void Promise.all(
       nodeIds.map(async (nodeId) => {
         const descriptor = await describePreview(previewPolicy, nodeId, snapshot.source.projectId);
@@ -330,7 +340,7 @@ export function DesktopCockpit({
     return () => {
       disposed = true;
     };
-  }, [build, describePreview, snapshot.editablePrototype.graph.nodes, snapshot.source.projectId]);
+  }, [build, describePreview, referenceScreenKey, snapshot.source.projectId]);
   const runtimeNode = snapshot.editablePrototype.graph.nodes.find(
     (node) => node.id === snapshot.editablePrototype.runtime?.activeNodeId
   );
@@ -360,9 +370,7 @@ export function DesktopCockpit({
   >();
   const [replyDrafts, setReplyDrafts] = useState<Readonly<Record<string, string>>>({});
   const [graphSaveStatus, setGraphSaveStatus] = useState('Saved graph is current.');
-  const [aiStatus, setAiStatus] = useState(
-    'Select a compiler-authenticated rendered React element when this change needs context.'
-  );
+  const [aiStatus, setAiStatus] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [proposalPreviewSwitching, setProposalPreviewSwitching] = useState(false);
   const [manualEditStatus, setManualEditStatus] = useState<string>();
@@ -394,6 +402,10 @@ export function DesktopCockpit({
   const resizing = useRef<'left' | 'right' | undefined>(undefined);
   const threadActionRef = useRef<'idle' | 'replying' | 'resolving'>('idle');
   const prototypeModeChangingRef = useRef(false);
+  const prototypeOwnerEpoch = useRef(0);
+  // A presentation owns its cancellation from before the host mode change,
+  // so Escape cannot accidentally cancel a newer or unrelated preview refresh.
+  const presentationTransition = useRef<AbortController | undefined>(undefined);
   const threadInvokingControl = useRef<HTMLElement | null>(null);
   const inspectorTabRefs = useRef(new Map<InspectorTab, HTMLButtonElement>());
   const inspectorDrawerRef = useRef<HTMLElement | null>(null);
@@ -596,9 +608,19 @@ export function DesktopCockpit({
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.key !== 'Escape') return;
+      if (canvasMode === 'present' && presentationTransition.current !== undefined) {
+        event.preventDefault();
+        presentationTransition.current.abort();
+        setGraphSaveStatus('Returning to Design…');
+        return;
+      }
       if (
         event.target instanceof Element &&
-        event.target.closest('.artifact-direct-selection[data-canvas-overlay-interaction]') !== null
+        // The inline editor is portaled outside the selection rectangle. Its
+        // own Escape cancels the draft while preserving the selected element.
+        event.target.closest(
+          '.artifact-direct-selection[data-canvas-overlay-interaction], .artifact-direct-text-editor'
+        ) !== null
       )
         return;
       if (
@@ -638,6 +660,7 @@ export function DesktopCockpit({
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [
+    canvasMode,
     compactAiRailOpen,
     compactInspector,
     inspectorDrawerOpen,
@@ -651,6 +674,19 @@ export function DesktopCockpit({
     currentAiTarget,
     viewportCompactCanvas
   ]);
+  useEffect(() => {
+    prototypeModeChangingRef.current = false;
+    setPrototypeModeChanging(false);
+    return () => {
+      // Revoke the component/project owner before abort callbacks can recover.
+      // An unmounted cockpit must never compensate against a newer host owner.
+      const departed = presentationTransition.current;
+      presentationTransition.current = undefined;
+      prototypeOwnerEpoch.current += 1;
+      prototypeModeChangingRef.current = false;
+      departed?.abort();
+    };
+  }, [snapshot.source.projectId]);
   useEffect(() => {
     if (!compactInspector || !inspectorDrawerOpen) return;
     requestAnimationFrame(() => inspectorDrawerCloseRef.current?.focus());
@@ -903,18 +939,22 @@ export function DesktopCockpit({
       .then(onSnapshot)
       .then(() => message && setGraphSaveStatus(message))
       .catch((error: unknown) => setGraphSaveStatus(presentDesignerError(error, 'canvas')));
-  const presentAuthoringOwner = async (next: DesignerSnapshot): Promise<boolean> => {
+  const presentAuthoringOwner = async (
+    next: DesignerSnapshot,
+    ownsTransition: () => boolean = () => true
+  ): Promise<boolean> => {
     // Presentation and React Flow own different iframe mounts. A preview
     // authority registers its selection key only once, so a new document
     // must not reuse the presentation build's URL. Mount the authoring
     // owner first, then await a fresh nonce-fenced build and paint receipt.
+    if (!ownsTransition() || activeProjectRef.current !== next.source.projectId) return false;
     setCanvasMode('design');
     await new Promise<void>((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     );
-    if (activeProjectRef.current !== next.source.projectId) return false;
+    if (!ownsTransition() || activeProjectRef.current !== next.source.projectId) return false;
     await onRender(next, 'authoring');
-    return activeProjectRef.current === next.source.projectId;
+    return ownsTransition() && activeProjectRef.current === next.source.projectId;
   };
   const enterPrototypeMode = async (mode: 'edit' | 'run'): Promise<boolean> => {
     if (snapshot.editablePrototype.mode === mode && !(mode === 'edit' && canvasMode === 'present'))
@@ -927,15 +967,22 @@ export function DesktopCockpit({
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
     setGraphSaveStatus(mode === 'run' ? 'Starting saved prototype…' : 'Opening flow editor…');
+    const projectId = snapshot.source.projectId;
+    const ownerEpoch = prototypeOwnerEpoch.current;
+    const ownsLocalModeChange = () =>
+      prototypeOwnerEpoch.current === ownerEpoch && activeProjectRef.current === projectId;
+    const ownsModeChange = () => ownsLocalModeChange() && hostOwnsProject(projectId);
     let authoringRestored = false;
     try {
       const next =
-        snapshot.editablePrototype.mode === mode ? snapshot : await actions.setPrototypeMode(mode);
-      if (activeProjectRef.current !== next.source.projectId) return false;
+        snapshot.editablePrototype.mode === mode
+          ? snapshot
+          : await actions.setPrototypeMode(mode, projectId);
+      if (!ownsModeChange() || next.source.projectId !== projectId) return false;
       onSnapshot(next);
       if (mode === 'edit') {
         authoringRestored = true;
-        if (!(await presentAuthoringOwner(next))) return false;
+        if (!(await presentAuthoringOwner(next, ownsModeChange))) return false;
       }
       setGraphSaveStatus(
         mode === 'run'
@@ -944,6 +991,7 @@ export function DesktopCockpit({
       );
       return true;
     } catch (error) {
+      if (!ownsModeChange()) return false;
       setGraphSaveStatus(
         authoringRestored
           ? 'Editor restored; the preview could not refresh. Use Render to try again.'
@@ -951,8 +999,10 @@ export function DesktopCockpit({
       );
       return false;
     } finally {
-      prototypeModeChangingRef.current = false;
-      setPrototypeModeChanging(false);
+      if (ownsLocalModeChange()) {
+        prototypeModeChangingRef.current = false;
+        setPrototypeModeChanging(false);
+      }
     }
   };
   const saveGraph = async (
@@ -991,41 +1041,48 @@ export function DesktopCockpit({
       return false;
     }
     const projectId = snapshot.source.projectId;
+    const transition = new AbortController();
+    presentationTransition.current = transition;
+    const ownsLocalTransition = () =>
+      presentationTransition.current === transition && activeProjectRef.current === projectId;
+    const ownsTransition = () => ownsLocalTransition() && hostOwnsProject(projectId);
     prototypeModeChangingRef.current = true;
     setPrototypeModeChanging(true);
-    setGraphSaveStatus('Compiling the committed graph for the live artboard…');
+    setGraphSaveStatus('Preparing the prototype… You can exit while it loads.');
     try {
-      const next = await actions.setPrototypeMode('run');
-      if (activeProjectRef.current !== projectId || next.source.projectId !== projectId)
-        return false;
+      const next = await actions.setPrototypeMode('run', projectId);
+      if (!ownsTransition() || next.source.projectId !== projectId) return false;
+      if (transition.signal.aborted) throw new Error('Prototype preparation was cancelled.');
       onSnapshot(next);
       // Inspect selection is authoring-only state. Revalidating it here can
       // reject a valid committed graph after the designer already asked to
       // leave the editor, so presentation waits only for the compiled frame.
-      await onRender(next, 'presentation');
-      if (activeProjectRef.current !== projectId) return false;
+      await onRender(next, 'presentation', transition.signal);
+      if (transition.signal.aborted) throw new Error('Prototype preparation was cancelled.');
+      if (!ownsTransition()) return false;
       setGraphSaveStatus('The live artboard is running the committed graph.');
       return true;
     } catch (error) {
       // A departed presentation cannot compensate against the new host project.
-      if (activeProjectRef.current !== projectId) return false;
-      const message = presentDesignerError(error, 'preview');
+      if (!ownsTransition()) return false;
+      const message = transition.signal.aborted
+        ? 'Prototype preparation was cancelled. You’re back in Design.'
+        : presentDesignerError(error, 'preview');
       try {
-        const rollback = await actions.setPrototypeMode('edit');
-        if (activeProjectRef.current !== projectId || rollback.source.projectId !== projectId)
-          return false;
+        const rollback = await actions.setPrototypeMode('edit', projectId);
+        if (!ownsTransition() || rollback.source.projectId !== projectId) return false;
         onSnapshot(rollback);
         try {
-          if (!(await presentAuthoringOwner(rollback))) return false;
+          if (!(await presentAuthoringOwner(rollback, ownsTransition))) return false;
         } catch {
-          if (activeProjectRef.current !== projectId) return false;
+          if (!ownsTransition()) return false;
           setGraphSaveStatus(
             'Editor restored; the preview could not refresh. Use Render to try again.'
           );
           return false;
         }
       } catch {
-        if (activeProjectRef.current !== projectId) return false;
+        if (!ownsTransition()) return false;
         // The host may still own run mode. Keep Exit available instead of
         // claiming that the edit transition or an authoring frame succeeded.
         setGraphSaveStatus(
@@ -1036,8 +1093,11 @@ export function DesktopCockpit({
       setGraphSaveStatus(message);
       return false;
     } finally {
-      prototypeModeChangingRef.current = false;
-      setPrototypeModeChanging(false);
+      if (ownsLocalTransition()) {
+        presentationTransition.current = undefined;
+        prototypeModeChangingRef.current = false;
+        setPrototypeModeChanging(false);
+      }
     }
   };
   const startPrototypeScenario = async (
@@ -1087,7 +1147,13 @@ export function DesktopCockpit({
     mode: CanvasWorkspaceMode,
     _invoking: HTMLButtonElement
   ): Promise<void> => {
-    if (prototypeModeChangingRef.current) return;
+    if (prototypeModeChangingRef.current) {
+      if (mode === 'design' && presentationTransition.current !== undefined) {
+        presentationTransition.current.abort();
+        setGraphSaveStatus('Returning to Design…');
+      }
+      return;
+    }
     clearCanvasSelection();
     if (mode === 'present') {
       setSelectedThreadId(undefined);
@@ -1112,10 +1178,19 @@ export function DesktopCockpit({
       return;
     setCanvasMode('design');
   };
-  const requestAiCanvasTarget = (_invoking: HTMLButtonElement): void => {
+  const requestAiCanvasTarget = (_invoking?: HTMLButtonElement): void => {
     if (!canRequestAiTarget) return;
-    setAiStatus('Select a compiler-authenticated React element, then use Ask AI.');
-    if (viewportCompactCanvas) setCompactAiRailOpen(true);
+    if (
+      previewDirectSelectionAuthorized &&
+      currentPreviewTelemetry?.provenance === 'authenticated-preview-node' &&
+      currentPreviewTelemetry.selectionProof !== undefined
+    ) {
+      actOnMappedElement('ask-ai', currentPreviewTelemetry);
+      return;
+    }
+    setAiStatus('Click a rendered element, then choose Ask AI from its element toolbar.');
+    if (viewportCompactCanvas) setCompactAiRailVisible(false);
+    frame.current?.focus();
   };
   const actOnMappedElement = (
     action: 'ask-ai' | 'inspect',
@@ -1307,19 +1382,24 @@ export function DesktopCockpit({
       return;
     }
     setLeftCollapsed(false);
-    setRightCollapsed(true);
-    if (compactInspector) setInspectorDrawerOpen(false);
-    persistPreferences({ leftRailCollapsed: false, rightRailCollapsed: true });
+    if (compactInspector) {
+      setRightCollapsed(true);
+      setInspectorDrawerOpen(false);
+    }
+    persistPreferences({
+      leftRailCollapsed: false,
+      ...(compactInspector ? { rightRailCollapsed: true } : {})
+    });
   };
   const openInspectorWorkspace = (tab: InspectorTab) => {
     selectInspectorTab(tab);
     setRightCollapsed(false);
-    setLeftCollapsed(true);
+    if (compactInspector) setLeftCollapsed(true);
     if (viewportCompactCanvas) setCompactAiRailVisible(false);
     if (compactInspector) openInspectorDrawer();
     persistPreferences({
       inspectorTab: tab,
-      leftRailCollapsed: true,
+      ...(compactInspector ? { leftRailCollapsed: true } : {}),
       rightRailCollapsed: false
     });
   };
@@ -1953,10 +2033,11 @@ export function DesktopCockpit({
         inert={drawerAccessibility.backgroundIsInert || undefined}
       >
         <button
-          className="pane-toggle"
+          className="pane-toggle studio-pane-close"
           type="button"
           ref={compactAiRailCloseRef}
           aria-pressed={effectiveLeftCollapsed}
+          aria-label={effectiveLeftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
           onClick={() => {
             if (viewportCompactCanvas) {
               setCompactAiRailVisible(false, true);
@@ -1971,7 +2052,7 @@ export function DesktopCockpit({
             });
           }}
         >
-          {effectiveLeftCollapsed ? 'Show AI rail' : 'Hide AI rail'}
+          <StudioIcon name="close" />
         </button>
         <div className="conversation-rail__body" hidden={effectiveLeftCollapsed}>
           <AIConversationWorkspace
@@ -2004,9 +2085,8 @@ export function DesktopCockpit({
             }}
             onStatusChange={setAiStatus}
             onBusyChange={setConversationBusy}
-            onSelectOnCanvas={() =>
-              setAiStatus('Select a compiler-authenticated React element, then use Ask AI.')
-            }
+            onSelectOnCanvas={() => requestAiCanvasTarget()}
+            onOpenSetup={() => openInspectorWorkspace('setup')}
             onTargetClear={() => {
               setAiTarget(undefined);
               setAiTargetSummary(undefined);
@@ -2045,9 +2125,11 @@ export function DesktopCockpit({
           artifactReviews={canvasArtifactReviews}
           {...(artifactFocusRequest === undefined ? {} : { artifactFocusRequest })}
           mode={canvasMode}
+          presentationPending={prototypeModeChanging}
           readOnly={
             proposalPreviewActive ||
             prototypeModeChanging ||
+            !hostOwnsProject(snapshot.source.projectId) ||
             snapshot.prototypeGraphHydration.state === 'recovery-required'
           }
           saveStatus={graphSaveStatus}
@@ -2229,7 +2311,7 @@ export function DesktopCockpit({
           ) : null
         ) : (
           <button
-            className="pane-toggle"
+            className="pane-toggle studio-pane-close"
             type="button"
             aria-pressed={rightCollapsed}
             aria-label={rightCollapsed ? 'Show inspector' : 'Hide inspector'}
@@ -2243,7 +2325,7 @@ export function DesktopCockpit({
               });
             }}
           >
-            {rightCollapsed ? 'Show inspector' : 'Hide inspector'}
+            <StudioIcon name="close" />
           </button>
         )}
         {(compactInspector ? inspectorDrawerOpen : !rightCollapsed) ? (
