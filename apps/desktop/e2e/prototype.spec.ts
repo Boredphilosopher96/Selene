@@ -2119,56 +2119,120 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         throw new Error('Live preview gesture evidence requires physical frame and canvas bounds.');
       // Use a physical point in a generated React button, not the iframe
       // chrome, so the bridge proves that component hit-testing remains live.
-      const gesturePoint = initialFrameGeometry.action.center;
-      await window.mouse.move(gesturePoint.x, gesturePoint.y);
-      const localPointer = {
-        x: gesturePoint.x - flowBounds.x,
-        y: gesturePoint.y - flowBounds.y
+      // Chromium delivers native wheel coordinates at integral screen pixels.
+      // Use that same physical anchor for input and world-space measurements;
+      // a fractional synthetic center drifts by >1 world pixel at macOS pinch
+      // amplification even when the real wheel anchor remains fixed.
+      const gesturePoint = {
+        x: Math.round(initialFrameGeometry.action.center.x),
+        y: Math.round(initialFrameGeometry.action.center.y)
       };
-      await window.mouse.wheel(48, 72);
-      await expect
-        .poll(async () => (await readCanvasViewport()).y)
-        .toBeLessThan(viewportBeforePan.y);
-      const viewportAfterPan = await readCanvasViewport();
-      expect(viewportAfterPan.x).toBeLessThan(viewportBeforePan.x);
-      expect(viewportAfterPan.zoom).toBeCloseTo(viewportBeforePan.zoom);
-      const viewportBeforePinch = viewportAfterPan;
-      const worldBeforePinch = {
-        x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
-        y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
-      };
-      await window.keyboard.down('Control');
+      const gestureEvidenceKey = `__seleneCanvasGestureEvidence_${Date.now()}`;
+      await window.evaluate((key) => {
+        const events: unknown[] = [];
+        const record = (event: WheelEvent) =>
+          events.push({
+            trusted: event.isTrusted,
+            ctrlKey: event.ctrlKey,
+            x: event.clientX,
+            y: event.clientY,
+            deltaX: event.deltaX,
+            deltaY: event.deltaY
+          });
+        document.addEventListener('wheel', record, true);
+        (window as typeof window & Record<string, unknown>)[key] = {
+          events,
+          dispose: () => document.removeEventListener('wheel', record, true)
+        };
+      }, gestureEvidenceKey);
+      const takeNativeWheelEvents = () =>
+        window.evaluate((key) => {
+          const state = (window as typeof window & Record<string, unknown>)[key] as
+            { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;
+          state?.dispose();
+          delete (window as typeof window & Record<string, unknown>)[key];
+          return state?.events ?? [];
+        }, gestureEvidenceKey);
+      let gestureEvidenceAttached = false;
       try {
-        await window.mouse.wheel(0, -120);
+        await window.mouse.move(gesturePoint.x, gesturePoint.y);
+        const localPointer = {
+          x: gesturePoint.x - flowBounds.x,
+          y: gesturePoint.y - flowBounds.y
+        };
+        await window.mouse.wheel(48, 72);
+        await expect
+          .poll(async () => (await readCanvasViewport()).y)
+          .toBeLessThan(viewportBeforePan.y);
+        const viewportAfterPan = await readCanvasViewport();
+        expect(viewportAfterPan.x).toBeLessThan(viewportBeforePan.x);
+        expect(viewportAfterPan.zoom).toBeCloseTo(viewportBeforePan.zoom);
+        const viewportBeforePinch = viewportAfterPan;
+        const worldBeforePinch = {
+          x: (localPointer.x - viewportBeforePinch.x) / viewportBeforePinch.zoom,
+          y: (localPointer.y - viewportBeforePinch.y) / viewportBeforePinch.zoom
+        };
+        await window.keyboard.down('Control');
+        try {
+          await window.mouse.wheel(0, -120);
+        } finally {
+          await window.keyboard.up('Control');
+        }
+        await expect
+          .poll(async () => (await readCanvasViewport()).zoom)
+          .toBeGreaterThan(viewportBeforePinch.zoom);
+        const viewportAfterPinch = await readCanvasViewport();
+        const worldAfterPinch = {
+          x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
+          y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
+        };
+        const nativeWheelEvents = await takeNativeWheelEvents();
+        await test.info().attach('live-preview-canvas-gesture-evidence.json', {
+          body: JSON.stringify(
+            {
+              gesturePoint,
+              nativeWheelEvents,
+              flowBounds,
+              previewBounds,
+              viewportBeforePan,
+              viewportAfterPan,
+              viewportBeforePinch,
+              viewportAfterPinch,
+              worldBeforePinch,
+              worldAfterPinch
+            },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+        gestureEvidenceAttached = true;
+        expect(nativeWheelEvents).toEqual([
+          { trusted: true, ctrlKey: false, ...gesturePoint, deltaX: 48, deltaY: 72 },
+          { trusted: true, ctrlKey: true, ...gesturePoint, deltaX: 0, deltaY: -120 }
+        ]);
+        expect(Math.abs(worldAfterPinch.x - worldBeforePinch.x)).toBeLessThanOrEqual(1);
+        expect(Math.abs(worldAfterPinch.y - worldBeforePinch.y)).toBeLessThanOrEqual(1);
       } finally {
-        await window.keyboard.up('Control');
+        if (!gestureEvidenceAttached) {
+          const nativeWheelEvents = await takeNativeWheelEvents();
+          await test.info().attach('live-preview-canvas-gesture-partial-evidence.json', {
+            body: JSON.stringify(
+              {
+                gesturePoint,
+                nativeWheelEvents,
+                flowBounds,
+                previewBounds,
+                viewportBeforePan,
+                lastViewport: await readCanvasViewport()
+              },
+              null,
+              2
+            ),
+            contentType: 'application/json'
+          });
+        }
       }
-      await expect
-        .poll(async () => (await readCanvasViewport()).zoom)
-        .toBeGreaterThan(viewportBeforePinch.zoom);
-      const viewportAfterPinch = await readCanvasViewport();
-      const worldAfterPinch = {
-        x: (localPointer.x - viewportAfterPinch.x) / viewportAfterPinch.zoom,
-        y: (localPointer.y - viewportAfterPinch.y) / viewportAfterPinch.zoom
-      };
-      expect(Math.abs(worldAfterPinch.x - worldBeforePinch.x)).toBeLessThanOrEqual(1);
-      expect(Math.abs(worldAfterPinch.y - worldBeforePinch.y)).toBeLessThanOrEqual(1);
-      await test.info().attach('live-preview-canvas-gesture-evidence.json', {
-        body: JSON.stringify(
-          {
-            gesturePoint,
-            viewportBeforePan,
-            viewportAfterPan,
-            viewportBeforePinch,
-            viewportAfterPinch,
-            worldBeforePinch,
-            worldAfterPinch
-          },
-          null,
-          2
-        ),
-        contentType: 'application/json'
-      });
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas navigation' })
         .getByRole('button', { name: 'Fit selection', exact: true })
@@ -3671,6 +3735,63 @@ test('stages the governed catalog and applies source-backed manual editor operat
       async () => (await window.selene.designer.snapshot()).source.revision.id
     );
     const insertionFrame = await previewFrame.getAttribute('src');
+    const nativeDropBounds = await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.getContentBounds()
+    );
+    // The screen-space selection toolbar can legitimately overlap the artboard
+    // center. Find an exposed point in this preview's own physical surface,
+    // rather than forcing a drop through a separately owned toolbar portal.
+    // Arming the native drag moves the shield's top to the compiled/header
+    // boundary; all other edges stay fixed.
+    const catalogDropPoint = await previewFrame.evaluate((frame, nativeBounds) => {
+      const article = frame.closest('.canvas-artboard--active');
+      const shield = article?.querySelector<HTMLElement>('.canvas-artboard__navigation-shield');
+      const compiled = article?.querySelector<HTMLElement>('.canvas-artboard__compiled');
+      const flow = frame.closest('.react-flow');
+      const bridge = frame.parentElement?.querySelector('[data-selene-native-input-bridge]');
+      if (!shield || !compiled || !flow) throw new Error('Catalog drop surface unavailable.');
+      const idle = shield.getBoundingClientRect();
+      const artifact = compiled.getBoundingClientRect();
+      const preview = frame.getBoundingClientRect();
+      const canvas = flow.getBoundingClientRect();
+      const armed = {
+        left: idle.left,
+        top: artifact.top,
+        right: idle.right,
+        bottom: idle.bottom
+      };
+      const exposed = {
+        left: Math.max(armed.left, preview.left, canvas.left, 0) + 8,
+        top: Math.max(armed.top, preview.top, canvas.top, 0) + 8,
+        right: Math.min(armed.right, preview.right, canvas.right, nativeBounds.width) - 8,
+        bottom: Math.min(armed.bottom, preview.bottom, canvas.bottom, nativeBounds.height) - 8
+      };
+      if (exposed.right <= exposed.left || exposed.bottom <= exposed.top)
+        throw new Error('Catalog drop has no exposed native preview area.');
+      for (const y of [0.5, 0.25, 0.75]) {
+        for (const x of [0.5, 0.25, 0.75]) {
+          const point = {
+            x: Math.round(exposed.left + (exposed.right - exposed.left) * x),
+            y: Math.round(exposed.top + (exposed.bottom - exposed.top) * y)
+          };
+          const hit = document.elementFromPoint(point.x, point.y);
+          if (hit !== shield && hit !== frame && (!bridge || hit !== bridge)) continue;
+          return {
+            point,
+            targetPosition: { x: point.x - armed.left, y: point.y - armed.top },
+            armedBounds: armed,
+            nativeBounds,
+            previewBounds: preview.toJSON(),
+            inputOwner: hit === shield ? 'shield' : hit === frame ? 'iframe' : 'native-bridge'
+          };
+        }
+      }
+      throw new Error('Catalog drop points are covered by other canvas controls.');
+    }, nativeDropBounds);
+    await test.info().attach('catalog-native-drop-point.json', {
+      body: JSON.stringify(catalogDropPoint, null, 2),
+      contentType: 'application/json'
+    });
     const catalogDragEvidenceKey = `__seleneCatalogDragEvidence_${Date.now()}`;
     await window.evaluate((key) => {
       const events: unknown[] = [];
@@ -3678,7 +3799,11 @@ test('stages the governed catalog and applies source-backed manual editor operat
         const eventTarget = event.target instanceof Element ? event.target : null;
         events.push({
           type: event.type,
+          trusted: event.isTrusted,
           targetClass: eventTarget?.getAttribute('class') ?? null,
+          dropSurfaceBounds: eventTarget?.matches('[data-catalog-drop-surface]')
+            ? eventTarget.getBoundingClientRect().toJSON()
+            : null,
           targetCatalogDragKey: (eventTarget as HTMLElement | null)?.dataset.catalogDragKey ?? null,
           targetLabel: eventTarget?.getAttribute('aria-label') ?? null,
           targetTag: eventTarget?.tagName ?? null,
@@ -3702,7 +3827,9 @@ test('stages the governed catalog and applies source-backed manual editor operat
     }, catalogDragEvidenceKey);
     await buttonEntry
       .getByLabel('Drag Button onto the selected React container', { exact: true })
-      .dragTo(window.locator('[data-catalog-drop-surface]'));
+      .dragTo(window.locator('.canvas-artboard--active [data-catalog-drop-surface]'), {
+        targetPosition: catalogDropPoint.targetPosition
+      });
     const catalogDragEvidence = await window.evaluate(async (key) => {
       const state = (window as typeof window & Record<string, unknown>)[key] as
         { readonly events: readonly unknown[]; readonly dispose: () => void } | undefined;
@@ -3733,6 +3860,26 @@ test('stages the governed catalog and applies source-backed manual editor operat
       body: JSON.stringify(catalogDragEvidence, null, 2),
       contentType: 'application/json'
     });
+    expect(catalogDragEvidence.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'dragstart', trusted: true }),
+        expect.objectContaining({
+          type: 'drop',
+          trusted: true,
+          targetClass: 'canvas-artboard__navigation-shield',
+          clientX: catalogDropPoint.point.x,
+          clientY: catalogDropPoint.point.y,
+          transferPresent: true,
+          dropSurfaceBounds: expect.objectContaining({
+            left: catalogDropPoint.armedBounds.left,
+            top: catalogDropPoint.armedBounds.top,
+            right: catalogDropPoint.armedBounds.right,
+            bottom: catalogDropPoint.armedBounds.bottom
+          })
+        }),
+        expect.objectContaining({ type: 'dragend', trusted: true })
+      ])
+    );
     // Catalog insertion refreshes the source-backed preview, which may close
     // the transient asset rail. Assert the durable host revision and rebuilt
     // frame below instead of an unmounted rail-local status message.

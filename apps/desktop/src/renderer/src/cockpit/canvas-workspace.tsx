@@ -2319,8 +2319,8 @@ export function CanvasWorkspace({
           </div>
         ) : null}
       </header>
-      <footer className="canvas-workspace__footer" data-canvas-overlay-interaction>
-        {surface === 'canvas' ? (
+      {surface === 'canvas' ? (
+        <footer className="canvas-workspace__footer" data-canvas-overlay-interaction>
           <div
             className="canvas-workspace__tool-group canvas-workspace__navigation"
             role="toolbar"
@@ -2384,22 +2384,22 @@ export function CanvasWorkspace({
               <kbd>V</kbd>
             </button>
           </div>
-        ) : null}
-        <output
-          className="canvas-workspace__status"
-          aria-live="polite"
-          data-error={canvasError !== undefined || undefined}
-          title={safeDesignerNotice(
-            canvasError ?? saveStatus,
-            'Canvas status is unavailable. Try saving the canvas change again.'
-          )}
-        >
-          {safeDesignerNotice(
-            canvasError ?? saveStatus,
-            'Canvas status is unavailable. Try saving the canvas change again.'
-          )}
-        </output>
-      </footer>
+          <output
+            className="canvas-workspace__status"
+            aria-live="polite"
+            data-error={canvasError !== undefined || undefined}
+            title={safeDesignerNotice(
+              canvasError ?? saveStatus,
+              'Canvas status is unavailable. Try saving the canvas change again.'
+            )}
+          >
+            {safeDesignerNotice(
+              canvasError ?? saveStatus,
+              'Canvas status is unavailable. Try saving the canvas change again.'
+            )}
+          </output>
+        </footer>
+      ) : null}
       {proposalReview && surface === 'canvas' ? (
         <aside
           className="canvas-workspace__proposal-review"

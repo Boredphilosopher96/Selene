@@ -20,13 +20,17 @@ export const desktopPerformanceBudgets = Object.freeze({
 /** These are reference-fixture guardrails, not hardware-independent latency promises. */
 export function checkDesktopPerformanceReport(report, { requireSustainedSession = true } = {}) {
   const failures = [];
+  // Receipt values can contain arbitrary data. Keep diagnostics to fixed labels and limits;
+  // measured observations remain in the original receipt, never in the console summary.
   const atMost = (label, value, budget) => {
-    if (!Number.isFinite(value) || value < 0 || value > budget)
-      failures.push(`${label}: observed ${String(value)}, budget ${budget}`);
+    if (!Number.isFinite(value) || value < 0)
+      failures.push(`${label}: missing or invalid numeric observation, budget ${budget}`);
+    else if (value > budget) failures.push(`${label}: exceeds budget ${budget}`);
   };
   const atLeast = (label, value, minimum) => {
-    if (!Number.isFinite(value) || value < minimum)
-      failures.push(`${label}: observed ${String(value)}, minimum ${minimum}`);
+    if (!Number.isFinite(value) || value < 0)
+      failures.push(`${label}: missing or invalid numeric observation, minimum ${minimum}`);
+    else if (value < minimum) failures.push(`${label}: below minimum ${minimum}`);
   };
   if (report.complete !== true || report.error) failures.push('The native run did not complete');
   if (report.methodology?.diagnosticForcedGc !== false)

@@ -59,6 +59,27 @@ async function selectSourceElement(
     height: contentBounds.height
   });
   const sourceBefore = (await window.evaluate(() => window.selene.designer.snapshot())).source;
+  const compactInspector = window.getByRole('dialog', {
+    name: 'Compact inspector workspace'
+  });
+  if (await compactInspector.isVisible()) {
+    await expect(compactInspector).toHaveAttribute('aria-modal', 'true');
+    await test.info().attach(`duplicate-${nodeId}-inspector-before-dismissal.png`, {
+      body: await window.screenshot(),
+      contentType: 'image/png'
+    });
+    // Returning to the canvas is a real user action. A compact inspector owns
+    // the foreground until dismissed; its background selection tool is inert.
+    await compactInspector.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+    await expect(compactInspector).not.toBeVisible();
+    expect((await window.evaluate(() => window.selene.designer.snapshot())).source).toEqual(
+      sourceBefore
+    );
+    await test.info().attach(`duplicate-${nodeId}-inspector-dismissal.json`, {
+      body: JSON.stringify({ nativeBounds: contentBounds, sourceUnchanged: true }, null, 2),
+      contentType: 'application/json'
+    });
+  }
   await window
     .getByRole('toolbar', { name: 'Canvas navigation' })
     .getByRole('button', { name: 'Selection', exact: true })
@@ -328,7 +349,84 @@ process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{buffer+=chunk;
   });
   try {
     const window = await application.firstWindow({ timeout: 5_000 });
-    await window.setViewportSize({ width: 1280, height: 900 });
+    // Exercise the actual compact inspector contract on every native runner.
+    // The window manager may clamp height, so fence the settled granted
+    // content surface instead of emulating a larger renderer viewport.
+    await expect(window.getByRole('heading', { name: 'Start a local project' })).toBeVisible();
+    const requestedBounds = { width: 1024, height: 700 };
+    await application.evaluate(({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]!.setContentSize(size.width, size.height);
+    }, requestedBounds);
+    const readNativeSurface = () =>
+      application.evaluate(({ BrowserWindow }) => {
+        const ownedWindow = BrowserWindow.getAllWindows()[0]!;
+        return {
+          bounds: ownedWindow.getContentBounds(),
+          shown: ownedWindow.isVisible(),
+          minimized: ownedWindow.isMinimized()
+        };
+      });
+    const usableNativeSurface = (surface: Awaited<ReturnType<typeof readNativeSurface>>) =>
+      surface.shown &&
+      !surface.minimized &&
+      Object.values(surface.bounds).every(Number.isFinite) &&
+      surface.bounds.width > 0 &&
+      surface.bounds.height > 0;
+    let previousBounds = '';
+    let stableSince = Date.now();
+    await expect
+      .poll(async () => {
+        const surface = await readNativeSurface();
+        if (!usableNativeSurface(surface)) {
+          previousBounds = '';
+          stableSince = Date.now();
+          return false;
+        }
+        const signature = JSON.stringify(surface);
+        if (signature !== previousBounds) {
+          previousBounds = signature;
+          stableSince = Date.now();
+        }
+        return Date.now() - stableSince >= 200;
+      })
+      .toBe(true);
+    const grantedSurface = await readNativeSurface();
+    expect(JSON.stringify(grantedSurface)).toBe(previousBounds);
+    expect(usableNativeSurface(grantedSurface)).toBe(true);
+    const grantedBounds = grantedSurface.bounds;
+    await window.setViewportSize({ width: grantedBounds.width, height: grantedBounds.height });
+    await window.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+    });
+    const alignedSurface = await readNativeSurface();
+    expect(usableNativeSurface(alignedSurface)).toBe(true);
+    expect(alignedSurface).toEqual(grantedSurface);
+    const rendererBounds = await window.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight
+    }));
+    expect(rendererBounds).toEqual({
+      width: grantedBounds.width,
+      height: grantedBounds.height
+    });
+    expect(grantedBounds.width).toBeLessThanOrEqual(requestedBounds.width);
+    await testInfo.attach('duplicate-native-window.json', {
+      body: JSON.stringify(
+        {
+          requestedBounds,
+          grantedBounds,
+          rendererBounds,
+          shown: alignedSurface.shown,
+          minimized: alignedSurface.minimized
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
     await window.bringToFront();
     await window.getByLabel('Project name').fill('Native duplicate journey');
     await window.getByRole('button', { name: 'Create project', exact: true }).click();
@@ -368,16 +466,26 @@ process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{buffer+=chunk;
     });
     await window.getByRole('button', { name: 'Hide AI rail', exact: true }).click();
     await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    const compactInspector = window.getByRole('dialog', { name: 'Compact inspector workspace' });
+    await expect(compactInspector).toBeVisible();
+    await expect(compactInspector).toHaveAttribute('aria-modal', 'true');
     const before = await window.evaluate(async () => window.selene.designer.snapshot());
     const panel = preview.locator('[data-selene-node-id="designer.summary"]');
     await selectSourceElement(window, application, panel, 'designer.summary');
+    await expect(compactInspector).not.toBeVisible();
     await window
       .getByRole('toolbar', { name: 'Selected React element actions' })
       .getByRole('button', { name: 'Duplicate', exact: true })
       .click();
-    await expect(window.getByLabel('Manual React edit status')).toHaveText(
+    // The operation status lives in the inspector. Reopen that real compact
+    // surface to review it, then return before the canvas/history journey.
+    await window.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    await expect(compactInspector).toBeVisible();
+    await expect(compactInspector.getByLabel('Manual React edit status')).toHaveText(
       'Element duplicated from React source.'
     );
+    await compactInspector.getByRole('button', { name: 'Back to canvas', exact: true }).click();
+    await expect(compactInspector).not.toBeVisible();
     await expect(preview.getByRole('heading', { name: 'Duplicate this panel' })).toHaveCount(2);
     const copied = await window.evaluate(async () => window.selene.designer.snapshot());
     expect(copied.source.revision.id).not.toBe(before.source.revision.id);

@@ -1748,8 +1748,77 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
     await destination.focus();
     await expect(destination).toBeFocused();
     await expect(destination.locator('option[value="dashboard"]')).toHaveText('Overview');
+    await destination.evaluate((node) => {
+      if (!(node instanceof HTMLSelectElement))
+        throw new Error('Native destination select missing.');
+      const events: unknown[] = [];
+      const record = (event: Event) =>
+        events.push({
+          type: event.type,
+          trusted: event.isTrusted,
+          key: event instanceof KeyboardEvent ? event.key : null,
+          value: node.value,
+          ownsFocus: document.activeElement === node
+        });
+      const types = ['keydown', 'input', 'change'] as const;
+      for (const type of types) node.addEventListener(type, record);
+      Reflect.set(node, '__seleneNativeDestinationEvidence', {
+        events,
+        dispose: () => types.forEach((type) => node.removeEventListener(type, record))
+      });
+    });
+    // On macOS a closed native select opens its popup on ArrowUp; it does not
+    // change value yet. Explicitly open, navigate, and commit the native menu
+    // on every platform before checking the exact renderer and host outcome.
+    await window.keyboard.press('Space');
     await window.keyboard.press('ArrowUp');
-    await expect(destination).toHaveValue('dashboard');
+    await window.keyboard.press('Enter');
+    let destinationInput:
+      { readonly value: string; readonly events: readonly unknown[] } | undefined;
+    try {
+      await expect(destination).toHaveValue('dashboard');
+    } finally {
+      destinationInput = await destination.evaluate((node) => {
+        if (!(node instanceof HTMLSelectElement))
+          throw new Error('Native destination select missing.');
+        const state = Reflect.get(node, '__seleneNativeDestinationEvidence') as
+          | {
+              readonly events: readonly unknown[];
+              readonly dispose: () => void;
+            }
+          | undefined;
+        state?.dispose();
+        Reflect.deleteProperty(node, '__seleneNativeDestinationEvidence');
+        return { value: node.value, events: state?.events ?? [] };
+      });
+      await testInfo.attach('canvas-native-destination-keyboard.json', {
+        body: JSON.stringify(destinationInput, null, 2),
+        contentType: 'application/json'
+      });
+    }
+    expect(destinationInput.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'keydown',
+          trusted: true,
+          key: ' ',
+          ownsFocus: true
+        }),
+        expect.objectContaining({
+          type: 'input',
+          trusted: true,
+          value: 'dashboard',
+          ownsFocus: true
+        }),
+        expect.objectContaining({
+          type: 'change',
+          trusted: true,
+          value: 'dashboard',
+          ownsFocus: true
+        })
+      ])
+    );
+    expect(await readGraph()).toEqual(beforeInvalid);
     const saveConnection = editor.getByRole('button', { name: 'Save connection', exact: true });
     await saveConnection.focus();
     await window.keyboard.press('Enter');

@@ -39,30 +39,72 @@ async function openStudio(userData: string) {
   });
   const page = await application.firstWindow();
   await expect(page.getByRole('heading', { name: 'Start a local project' })).toBeVisible();
-  await page.setViewportSize({ width: 1180, height: 812 });
-  const emulatedBounds = await application.evaluate(({ BrowserWindow }) =>
+  const initialNativeBounds = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0]!.getContentBounds()
   );
-  // CDP viewport emulation alone may exceed Electron's native input surface.
-  // Resize the real test window as well, without changing the product defaults.
-  await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0]!.setContentSize(1180, 812)
+  const requestedContentSize = { width: 1180, height: 812 };
+  // The window manager may clamp this request to its usable display. Only
+  // the shown, settled real content surface can define our input viewport.
+  await application.evaluate(
+    ({ BrowserWindow }, requested) =>
+      BrowserWindow.getAllWindows()[0]!.setContentSize(requested.width, requested.height),
+    requestedContentSize
   );
+  let acceptedNativeBounds = initialNativeBounds;
+  let previousSignature: string | undefined;
+  let stableSince = Date.now();
   await expect
-    .poll(() =>
-      application.evaluate(({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]!.getContentBounds()
-      )
-    )
-    .toMatchObject({ width: 1180, height: 812 });
+    .poll(async () => {
+      const native = await application.evaluate(({ BrowserWindow }) => {
+        const window = BrowserWindow.getAllWindows()[0]!;
+        return {
+          shown: window.isVisible(),
+          minimized: window.isMinimized(),
+          bounds: window.getContentBounds()
+        };
+      });
+      const usable =
+        native.shown &&
+        !native.minimized &&
+        Object.values(native.bounds).every(Number.isFinite) &&
+        native.bounds.width > 0 &&
+        native.bounds.height > 0;
+      const signature = JSON.stringify(native.bounds);
+      if (!usable || signature !== previousSignature) {
+        previousSignature = usable ? signature : undefined;
+        stableSince = Date.now();
+      }
+      acceptedNativeBounds = native.bounds;
+      return usable && Date.now() - stableSince >= 200;
+    })
+    .toBe(true);
+  await page.setViewportSize({
+    width: acceptedNativeBounds.width,
+    height: acceptedNativeBounds.height
+  });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    );
+  });
+  const alignedNative = await application.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]!;
+    return {
+      shown: window.isVisible(),
+      minimized: window.isMinimized(),
+      bounds: window.getContentBounds()
+    };
+  });
+  expect(alignedNative).toEqual({ shown: true, minimized: false, bounds: acceptedNativeBounds });
+  const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  expect(viewport).toEqual({
+    width: acceptedNativeBounds.width,
+    height: acceptedNativeBounds.height
+  });
   await test.info().attach('native-window-viewport.json', {
     body: JSON.stringify(
-      {
-        emulatedBounds,
-        nativeBounds: await application.evaluate(({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows()[0]!.getContentBounds()
-        )
-      },
+      { requestedContentSize, initialNativeBounds, acceptedNativeBounds, viewport },
       null,
       2
     ),

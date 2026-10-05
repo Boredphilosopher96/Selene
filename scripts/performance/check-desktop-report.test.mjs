@@ -1,3 +1,9 @@
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { expect, it } from 'vitest';
 
 import { checkDesktopPerformanceReport } from './check-desktop-report.mjs';
@@ -77,3 +83,73 @@ it('rejects missing stylesheet, dirty source, renderer errors and unobserved pro
   report.cleanup[0].observedProcessCount = 0;
   expect(checkDesktopPerformanceReport(report).failures).toHaveLength(4);
 });
+
+it('rejects malformed observations without copying receipt content into diagnostics', () => {
+  const marker = 'private-receipt-value';
+  const report = fixture();
+  report.selectionToAuthorizedPaintMs.samples = marker;
+  report.selectionToAuthorizedPaintMs.p95 = marker;
+  report.afterSessionSelectionToAuthorizedPaintMs.p95 = {
+    toString() {
+      throw new Error('Receipt values must not be stringified');
+    }
+  };
+
+  const result = checkDesktopPerformanceReport(report);
+
+  expect(result.passed).toBe(false);
+  expect(result.failures).toEqual([
+    'selection samples: missing or invalid numeric observation, minimum 60',
+    'selection p95 ms: missing or invalid numeric observation, budget 150',
+    'after-session selection p95 ms: missing or invalid numeric observation, budget 150'
+  ]);
+  expect(JSON.stringify(result)).not.toContain(marker);
+});
+
+it('keeps inclusive numeric budget boundaries and reports out-of-range metric labels', () => {
+  const report = fixture();
+  report.selectionToAuthorizedPaintMs.p95 = 150;
+  report.afterSessionSelectionToAuthorizedPaintMs.p95 = 150;
+  expect(checkDesktopPerformanceReport(report).passed).toBe(true);
+
+  report.selectionToAuthorizedPaintMs.samples = 59;
+  report.selectionToAuthorizedPaintMs.p95 = 151;
+  report.afterSessionSelectionToAuthorizedPaintMs.p95 = 151;
+  expect(checkDesktopPerformanceReport(report).failures).toEqual([
+    'selection samples: below minimum 60',
+    'selection p95 ms: exceeds budget 150',
+    'after-session selection p95 ms: exceeds budget 150'
+  ]);
+});
+
+it.each([false, true])(
+  'emits safe CLI diagnostics and the correct exit code (invalid: %s)',
+  (invalid) => {
+    const directory = mkdtempSync(join(tmpdir(), 'selene-performance-check-'));
+    try {
+      const report = fixture();
+      const marker = 'private-receipt-value';
+      if (invalid) {
+        report.selectionToAuthorizedPaintMs.samples = marker;
+        report.selectionToAuthorizedPaintMs.p95 = marker;
+        report.afterSessionSelectionToAuthorizedPaintMs.p95 = marker;
+      }
+      const receipt = join(directory, 'receipt.json');
+      writeFileSync(receipt, JSON.stringify(report));
+      const result = spawnSync(
+        process.execPath,
+        [fileURLToPath(new URL('./check-desktop-report.mjs', import.meta.url)), receipt],
+        { encoding: 'utf8' }
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(invalid ? 1 : 0);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).not.toContain(marker);
+      expect(JSON.parse(result.stdout)).toEqual(checkDesktopPerformanceReport(report));
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+);
