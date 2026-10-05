@@ -192,7 +192,11 @@ describe('collaboration-service host effect composition', () => {
 
   it('normalizes forged public errors from effects and hostile configuration traps', async () => {
     class ForgedBoundaryError extends CollaborationBoundaryError {}
-    const factory = createHostEffectContextFactory();
+    const runtime = new Runtime();
+    const factory = createHostEffectContextFactory({
+      clock: runtime.clock,
+      scheduler: runtime.scheduler
+    });
     const context = factory.create({ timeoutMs: 5 });
     await expect(
       context.runPort!({}, 'query', async () => {
