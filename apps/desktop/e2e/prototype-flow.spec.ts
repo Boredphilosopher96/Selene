@@ -1748,6 +1748,28 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
     await destination.focus();
     await expect(destination).toBeFocused();
     await expect(destination.locator('option[value="dashboard"]')).toHaveText('Overview');
+    const destinationOptions = await destination.evaluate((node) => {
+      if (!(node instanceof HTMLSelectElement))
+        throw new Error('Native destination select missing.');
+      return {
+        value: node.value,
+        selectedIndex: node.selectedIndex,
+        enabled: !node.disabled,
+        ownsFocus: document.activeElement === node,
+        options: [...node.options].map((option) => ({ value: option.value, label: option.label }))
+      };
+    });
+    expect(destinationOptions).toEqual({
+      value: 'orders',
+      selectedIndex: 2,
+      enabled: true,
+      ownsFocus: true,
+      options: [
+        { value: '', label: 'Choose destination' },
+        { value: 'dashboard', label: 'Overview' },
+        { value: 'orders', label: 'Orders' }
+      ]
+    });
     await destination.evaluate((node) => {
       if (!(node instanceof HTMLSelectElement))
         throw new Error('Native destination select missing.');
@@ -1757,22 +1779,32 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
           type: event.type,
           trusted: event.isTrusted,
           key: event instanceof KeyboardEvent ? event.key : null,
+          ...(event instanceof KeyboardEvent
+            ? {
+                code: event.code,
+                charCode: event.charCode,
+                ctrlKey: event.ctrlKey,
+                altKey: event.altKey,
+                metaKey: event.metaKey,
+                shiftKey: event.shiftKey,
+                repeat: event.repeat
+              }
+            : {}),
           value: node.value,
           ownsFocus: document.activeElement === node
         });
-      const types = ['keydown', 'input', 'change'] as const;
+      const types = ['keydown', 'keypress', 'input', 'change'] as const;
       for (const type of types) node.addEventListener(type, record);
       Reflect.set(node, '__seleneNativeDestinationEvidence', {
         events,
         dispose: () => types.forEach((type) => node.removeEventListener(type, record))
       });
     });
-    // On macOS a closed native select opens its popup on ArrowUp; it does not
-    // change value yet. Explicitly open, navigate, and commit the native menu
-    // on every platform before checking the exact renderer and host outcome.
-    await window.keyboard.press('Space');
-    await window.keyboard.press('ArrowUp');
-    await window.keyboard.press('Enter');
+    // Blink's native closed-select typeahead searches after the current option
+    // and wraps. With the observed labels/order above, unmodified "o" moves
+    // Orders to Overview without relying on an AppKit popup accepting CDP keys.
+    // See Chromium150 HTMLSelectElement::TypeAheadFind and TypeAhead::HandleEvent.
+    await window.keyboard.press('o');
     let destinationInput:
       { readonly value: string; readonly events: readonly unknown[] } | undefined;
     try {
@@ -1792,32 +1824,40 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
         return { value: node.value, events: state?.events ?? [] };
       });
       await testInfo.attach('canvas-native-destination-keyboard.json', {
-        body: JSON.stringify(destinationInput, null, 2),
+        body: JSON.stringify({ destinationOptions, ...destinationInput }, null, 2),
         contentType: 'application/json'
       });
     }
-    expect(destinationInput.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: 'keydown',
-          trusted: true,
-          key: ' ',
-          ownsFocus: true
-        }),
-        expect.objectContaining({
-          type: 'input',
-          trusted: true,
-          value: 'dashboard',
-          ownsFocus: true
-        }),
-        expect.objectContaining({
-          type: 'change',
-          trusted: true,
-          value: 'dashboard',
-          ownsFocus: true
-        })
-      ])
-    );
+    const keyboardModifiers = {
+      code: 'KeyO',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+      repeat: false
+    };
+    expect(destinationInput.events).toEqual([
+      {
+        type: 'keydown',
+        trusted: true,
+        key: 'o',
+        charCode: 0,
+        ...keyboardModifiers,
+        value: 'orders',
+        ownsFocus: true
+      },
+      {
+        type: 'keypress',
+        trusted: true,
+        key: 'o',
+        charCode: 111,
+        ...keyboardModifiers,
+        value: 'orders',
+        ownsFocus: true
+      },
+      { type: 'input', trusted: true, key: null, value: 'dashboard', ownsFocus: true },
+      { type: 'change', trusted: true, key: null, value: 'dashboard', ownsFocus: true }
+    ]);
     expect(await readGraph()).toEqual(beforeInvalid);
     const saveConnection = editor.getByRole('button', { name: 'Save connection', exact: true });
     await saveConnection.focus();

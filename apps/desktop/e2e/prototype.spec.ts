@@ -1936,6 +1936,7 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         readonly nodeId: string;
         readonly portId: string;
       }) => {
+        const nativeBounds = await limitViewportToNativeSurface(application, window);
         await expect(previewFrame).toBeVisible({ timeout: previewPresentationTimeout });
         const action = prototype.locator(
           `button[data-selene-flow-node="${expectedAction.nodeId}"][data-selene-action-port="${expectedAction.portId}"]`
@@ -1994,6 +1995,13 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
             height: bounds.height,
             visibility: getComputedStyle(frame).visibility,
             display: getComputedStyle(frame).display,
+            frameUrl: frame.getAttribute('src'),
+            ownerState: {
+              ariaBusy: viewport.getAttribute('aria-busy'),
+              pending: viewport.getAttribute('data-pending'),
+              readOnly: viewport.getAttribute('data-read-only'),
+              inert: frame.closest('[inert]') !== null
+            },
             stageTransform: transform,
             stageTransformScaleX: matrixValues?.[0] ?? 1,
             stageTransformScaleY: matrixValues?.[3] ?? 1,
@@ -2038,6 +2046,37 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
         expect(geometry.viewport.scrollbarGutter).toBe('auto');
         const expectedInputOwner =
           geometry.action.interactionMode === 'design' ? 'native-bridge' : 'iframe';
+        const documentIdentity = await prototype.locator('html').evaluate((root) => ({
+          nonce: root.getAttribute('data-preview-nonce'),
+          revisionId: root.getAttribute('data-preview-revision-id'),
+          navigation: root.getAttribute('data-selene-canvas-navigation')
+        }));
+        const hostOwner = await window.evaluate(async () => {
+          const snapshot = await window.selene.designer.snapshot();
+          return {
+            mode: snapshot.editablePrototype.mode,
+            activeNodeId: snapshot.editablePrototype.runtime?.activeNodeId,
+            revisionId: snapshot.source.revision.id
+          };
+        });
+        const currentNativeBounds = await application.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]!.getContentBounds()
+        );
+        await test.info().attach(`preview-action-${expectedAction.portId}-physical-owner.json`, {
+          body: JSON.stringify(
+            { nativeBounds, currentNativeBounds, documentIdentity, hostOwner, geometry },
+            null,
+            2
+          ),
+          contentType: 'application/json'
+        });
+        expect(currentNativeBounds).toEqual(nativeBounds);
+        expect(await previewFrame.getAttribute('src')).toBe(geometry.frameUrl);
+        expect(geometry.action.center.x).toBeGreaterThanOrEqual(0);
+        expect(geometry.action.center.y).toBeGreaterThanOrEqual(0);
+        expect(geometry.action.center.x).toBeLessThan(nativeBounds.width);
+        expect(geometry.action.center.y).toBeLessThan(nativeBounds.height);
+        expect(geometry.ownerState.inert).toBe(false);
         expect(geometry.action).toMatchObject({
           actionPort: expectedAction.portId,
           nodeId: expectedAction.nodeId,
@@ -2751,6 +2790,18 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       diagnostics.push(
         `direct move source revision: ${preMoveRevision} -> ${appliedMoveSourceRevision}`
       );
+      const nativeBeforePresentation = await limitViewportToNativeSurface(application, window);
+      expect(await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({
+        width: nativeBeforePresentation.width,
+        height: nativeBeforePresentation.height
+      });
+      expect(
+        await application.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]!.getContentBounds()
+        )
+      ).toEqual(nativeBeforePresentation);
+      const authoringFrameUrl = await previewFrame.getAttribute('src');
+      const authoringNonce = await prototype.locator('html').getAttribute('data-preview-nonce');
       await unifiedCanvas
         .getByRole('toolbar', { name: 'Canvas tools' })
         .getByRole('button', { name: 'Present', exact: true })
@@ -2759,6 +2810,37 @@ test('configured JSONL agent revises, renders, baselines, and exports a stale ha
       await expect(presentation).toBeVisible();
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeVisible();
       await expect(unifiedCanvas).toHaveCount(0);
+      // Exit is deliberately available before the new run build has painted.
+      // Its presence cannot authorize input through the still-inert prior frame.
+      await expect(presentation).not.toHaveAttribute('aria-busy', 'true');
+      await expect(presentation).not.toHaveAttribute('data-pending', 'true');
+      await expect(presentation.locator('.canvas-presentation__artifact')).not.toHaveAttribute(
+        'inert'
+      );
+      await expect(previewFrame).not.toHaveAttribute('src', authoringFrameUrl!);
+      await expect(prototype.locator('html')).not.toHaveAttribute(
+        'data-preview-nonce',
+        authoringNonce!
+      );
+      await expect(prototype.locator('html')).toHaveAttribute(
+        'data-selene-canvas-navigation',
+        'prototype'
+      );
+      await expect(prototype.locator('html')).toHaveAttribute(
+        'data-preview-revision-id',
+        appliedMoveSourceRevision
+      );
+      await expect
+        .poll(() =>
+          window.evaluate(async () => {
+            const snapshot = await window.selene.designer.snapshot();
+            return {
+              mode: snapshot.editablePrototype.mode,
+              activeNodeId: snapshot.editablePrototype.runtime?.activeNodeId
+            };
+          })
+        )
+        .toEqual({ mode: 'run', activeNodeId: 'dashboard' });
       const presentedAction = await previewFrameAction({
         label: 'Review orders',
         nodeId: 'dashboard',
@@ -3870,16 +3952,43 @@ test('stages the governed catalog and applies source-backed manual editor operat
           clientX: catalogDropPoint.point.x,
           clientY: catalogDropPoint.point.y,
           transferPresent: true,
-          dropSurfaceBounds: expect.objectContaining({
-            left: catalogDropPoint.armedBounds.left,
-            top: catalogDropPoint.armedBounds.top,
-            right: catalogDropPoint.armedBounds.right,
-            bottom: catalogDropPoint.armedBounds.bottom
-          })
+          dropSurfaceBounds: expect.any(Object)
         }),
         expect.objectContaining({ type: 'dragend', trusted: true })
       ])
     );
+    const nativeDrop = catalogDragEvidence.events.find(
+      (event) =>
+        event !== null &&
+        typeof event === 'object' &&
+        Reflect.get(event, 'type') === 'drop' &&
+        Reflect.get(event, 'trusted') === true &&
+        Reflect.get(event, 'targetClass') === 'canvas-artboard__navigation-shield' &&
+        Reflect.get(event, 'clientX') === catalogDropPoint.point.x &&
+        Reflect.get(event, 'clientY') === catalogDropPoint.point.y &&
+        Reflect.get(event, 'transferPresent') === true
+    );
+    expect(nativeDrop).toBeDefined();
+    const dropSurfaceEdges = ['left', 'top', 'right', 'bottom'] as const;
+    const measuredDropBounds = Reflect.get(nativeDrop as object, 'dropSurfaceBounds') as Record<
+      (typeof dropSurfaceEdges)[number],
+      number
+    >;
+    // Recomputing a transformed DOMRect after arming the shield can serialize
+    // an edge differently by a few float32 ULPs (0.00003052px on hosted macOS).
+    // This bound applies only to observed CSS edges, never native input,
+    // ownership, the wheel anchor threshold, or the source/drag outcome.
+    const cssGeometrySerializationEpsilon = 0.001;
+    for (const edge of dropSurfaceEdges) {
+      expect(Number.isFinite(measuredDropBounds[edge])).toBe(true);
+      expect(
+        Math.abs(measuredDropBounds[edge] - catalogDropPoint.armedBounds[edge])
+      ).toBeLessThanOrEqual(cssGeometrySerializationEpsilon);
+    }
+    expect(catalogDropPoint.point.x).toBeGreaterThanOrEqual(measuredDropBounds.left);
+    expect(catalogDropPoint.point.x).toBeLessThanOrEqual(measuredDropBounds.right);
+    expect(catalogDropPoint.point.y).toBeGreaterThanOrEqual(measuredDropBounds.top);
+    expect(catalogDropPoint.point.y).toBeLessThanOrEqual(measuredDropBounds.bottom);
     // Catalog insertion refreshes the source-backed preview, which may close
     // the transient asset rail. Assert the durable host revision and rebuilt
     // frame below instead of an unmounted rail-local status message.
