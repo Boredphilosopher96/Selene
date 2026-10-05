@@ -1,6 +1,6 @@
 export const PREVIEW_COMPILER_TIMEOUT_MS = 10_000;
 
-/** Bound the entire compiler adapter, including lazy Vite loading and its bundle wait. */
+/** Bound the caller's wait for lazy Vite loading and compilation; observe abandoned work. */
 export function runPreviewCompileWithDeadline<Artifact>(
   operation: (signal: AbortSignal) => Promise<Artifact>,
   signal?: AbortSignal
