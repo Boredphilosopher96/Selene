@@ -13,6 +13,63 @@ const viewport = {
 const toolbar = { width: 560, height: 80 };
 
 describe('artifactToolbarScreenPosition', () => {
+  it('keeps remembered title and summary exposed when neither side fits', () => {
+    const title = { left: 375, top: 244, right: 608, bottom: 278, width: 233, height: 34 };
+    const summary = { left: 375, top: 288, right: 608, bottom: 307, width: 233, height: 19 };
+    for (const right of [926, 768]) {
+      const constrained = { left: 8, top: 130, right, bottom: 760, width: right - 8, height: 630 };
+      const titlePosition = artifactToolbarScreenPosition(
+        title,
+        { width: 406, height: 36 },
+        constrained,
+        8,
+        'side',
+        [summary]
+      );
+      const summaryPosition = artifactToolbarScreenPosition(
+        summary,
+        { width: 406, height: 36 },
+        constrained,
+        8,
+        'side',
+        [title]
+      );
+      expect(titlePosition).toEqual({ left: 288.5, top: 200, placement: 'above' });
+      expect(summaryPosition).toEqual({ left: 288.5, top: 315, placement: 'below' });
+    }
+  });
+  it('keeps direct title actions beside the neighboring editable summary', () => {
+    const position = artifactToolbarScreenPosition(
+      { left: 375, top: 244, right: 608, bottom: 278, width: 233, height: 34 },
+      { width: 406, height: 36 },
+      { left: 8, top: 130, right: 1172, bottom: 760, width: 1164, height: 630 },
+      8,
+      'side'
+    );
+    expect(position).toEqual({ left: 616, top: 243, placement: 'right' });
+    expect(position.left).toBeGreaterThan(608);
+    const reverse = artifactToolbarScreenPosition(
+      { left: 375, top: 288, right: 608, bottom: 307, width: 233, height: 19 },
+      { width: 406, height: 36 },
+      { left: 8, top: 130, right: 1172, bottom: 760, width: 1164, height: 630 },
+      8,
+      'side'
+    );
+    expect(reverse).toEqual({ left: 616, top: 279.5, placement: 'right' });
+    expect(reverse.left).toBeGreaterThan(608);
+  });
+
+  it('uses a contained side when the preferred upper action lane is unavailable', () => {
+    expect(
+      artifactToolbarScreenPosition(
+        { left: 375, top: 145, right: 608, bottom: 179, width: 233, height: 34 },
+        { width: 406, height: 36 },
+        { left: 8, top: 130, right: 1172, bottom: 760, width: 1164, height: 630 },
+        8,
+        'side'
+      )
+    ).toEqual({ left: 616, top: 144, placement: 'right' });
+  });
   it('centers an in-bounds toolbar below the selection', () => {
     expect(
       artifactToolbarScreenPosition(

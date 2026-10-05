@@ -54,6 +54,7 @@ export interface PreviewPresentationReceipt {
 
 export type PreviewRefreshFailureCode =
   | 'compile-failed'
+  | 'compile-timeout'
   | 'revision-mismatch'
   | 'iframe-load-failed'
   | 'iframe-runtime-failed'
@@ -89,6 +90,12 @@ export interface PreviewPresentationClock {
 }
 
 export const DEFAULT_PREVIEW_PRESENTATION_TIMEOUT_MS = 15_000;
+export const DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS = 15_000;
+
+const previewCompileClock: PreviewPresentationClock = {
+  schedule: (task, delayMs) => globalThis.setTimeout(task, delayMs),
+  cancel: (handle) => globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>)
+};
 
 /**
  * Owns exactly one pending presentation. Replacement, abort, close, and timeout
@@ -279,6 +286,96 @@ function throwIfAborted(signal: AbortSignal | undefined, revisionId: string): vo
 }
 
 /**
+ * A compiler adapter may ignore cancellation or never settle (including an IPC
+ * request stalled before reaching the host). Own the wait as well as the signal:
+ * cancellation and deadline free the caller immediately, and both handlers stay
+ * attached to abandoned work so a late rejection is consumed without publishing
+ * a late result. The host adapter must revoke any build publication capability
+ * when this signal aborts; renderer cancellation alone cannot stop host work.
+ */
+export function compilePreviewWithinDeadline<
+  Snapshot extends RevisionSnapshot,
+  Build extends RevisionPreviewBuild
+>(input: {
+  readonly snapshot: Snapshot;
+  readonly compile: (snapshot: Snapshot, signal?: AbortSignal) => Promise<Build>;
+  readonly signal?: AbortSignal;
+  readonly compileClock?: PreviewPresentationClock;
+  readonly compileTimeoutMs?: number;
+}): Promise<Build> {
+  const revisionId = input.snapshot.source.revision.id;
+  const timeoutMs = input.compileTimeoutMs ?? DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS
+  )
+    throw new Error('Preview compile timeout must be between 1 and 15000 milliseconds');
+  const clock = input.compileClock ?? previewCompileClock;
+  const controller = new AbortController();
+
+  return new Promise<Build>((resolve, reject) => {
+    let settled = false;
+    let timer: unknown;
+    const cleanup = () => {
+      clock.cancel(timer);
+      input.signal?.removeEventListener('abort', onAbort);
+    };
+    const abandon = (error: PreviewRefreshError) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+      controller.abort();
+    };
+    const onAbort = () =>
+      abandon(new PreviewRefreshError('refresh-aborted', revisionId, 'The refresh was cancelled'));
+    input.signal?.addEventListener('abort', onAbort, { once: true });
+    if (input.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    timer = clock.schedule(
+      () =>
+        abandon(
+          new PreviewRefreshError(
+            'compile-timeout',
+            revisionId,
+            'The preview compiler did not finish in time'
+          )
+        ),
+      timeoutMs
+    );
+    if (settled) {
+      clock.cancel(timer);
+      return;
+    }
+    try {
+      const pending = input.compile(input.snapshot, controller.signal);
+      void pending.then(
+        (build) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(build);
+        },
+        (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      );
+    } catch (error) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    }
+  });
+}
+
+/**
  * Produces a receipt only after compile, presentation, and selection adapters
  * agree on the exact saved revision. No Electron, DOM, compiler, or agent leaks
  * into this coordination boundary.
@@ -298,12 +395,15 @@ export async function refreshPreviewRevision<
    */
   readonly selection: PreviewRefreshSelectionPolicy<Snapshot>;
   readonly signal?: AbortSignal;
+  /** Compile is bounded independently of the unchanged trusted paint deadline. */
+  readonly compileTimeoutMs?: number;
+  readonly compileClock?: PreviewPresentationClock;
 }): Promise<PreviewRefreshResult<Snapshot, Build>> {
   const revisionId = input.snapshot.source.revision.id;
   throwIfAborted(input.signal, revisionId);
   let build: Build;
   try {
-    build = await input.compile(input.snapshot, input.signal);
+    build = await compilePreviewWithinDeadline(input);
   } catch (error) {
     if (error instanceof PreviewRefreshError) throw error;
     throwIfAborted(input.signal, revisionId);

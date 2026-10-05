@@ -2,6 +2,38 @@ const mode = process.argv[2] ?? 'success';
 const sentAt = '2026-07-24T00:00:00.000Z';
 let sequence = 0;
 
+// This explicit full-App test fixture collapses only the known Dashboard
+// starter nodes into the replacement aliases below. Unknown removed IDs have
+// no declared migration and are still rejected by the production patch guard.
+const dashboardFixtureNodeMigration = Object.freeze({
+  'dashboard.brand': 'designer.root',
+  'dashboard.eyebrow': 'designer.title',
+  'dashboard.metric-health-label': 'designer.root',
+  'dashboard.metric-health-value': 'designer.root',
+  'dashboard.metric-orders-label': 'designer.root',
+  'dashboard.metric-orders-value': 'designer.root',
+  'dashboard.metric-projects-label': 'designer.root',
+  'dashboard.metric-projects-value': 'designer.root',
+  'dashboard.metrics': 'designer.root',
+  'dashboard.project-one': 'designer.root',
+  'dashboard.project-three': 'designer.root',
+  'dashboard.project-two': 'designer.root',
+  'dashboard.screen': 'designer.root',
+  'dashboard.section': 'designer.root',
+  'dashboard.work': 'designer.root',
+  'dashboard.work-summary': 'designer.summary',
+  'dashboard.work-title': 'designer.title',
+  'orders.back': 'designer.back-navigation',
+  'orders.first-customer': 'designer.root',
+  'orders.first-id': 'designer.root',
+  'orders.screen': 'designer.root',
+  'orders.summary': 'designer.summary',
+  'orders.table': 'designer.root',
+  'orders.table-title': 'designer.title',
+  'orders.title': 'designer.title',
+  'starter.fixture-note': 'designer.root'
+});
+
 const write = (kind, fields = {}) =>
   process.stdout.write(
     `${JSON.stringify({
@@ -95,6 +127,11 @@ function handle(message) {
     event: 'completed',
     output: {
       summary: 'Configured JSONL agent updated the prototype.',
+      nodeIdMapping: Object.fromEntries(
+        message.input.workspace.nodes
+          .filter(({ nodeId }) => Object.hasOwn(dashboardFixtureNodeMigration, nodeId))
+          .map(({ nodeId }) => [nodeId, dashboardFixtureNodeMigration[nodeId]])
+      ),
       operations: [
         {
           type: 'write',

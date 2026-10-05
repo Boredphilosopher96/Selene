@@ -544,12 +544,13 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const canvas = window.getByLabel('Design canvas');
     const compiledArtboard = canvas.getByLabel('Compiled React artboard');
     const canvasTools = canvas.getByRole('toolbar', { name: 'Canvas tools' });
+    const canvasNavigation = canvas.getByRole('toolbar', { name: 'Canvas navigation' });
     await expect(canvas).toBeVisible({ timeout: 5_000 });
     await expect(compiledArtboard).toBeVisible({ timeout: 5_000 });
     await expect(
       compiledArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Dashboard' })
+        .getByRole('heading', { name: 'Good work, in view.' })
     ).toBeVisible({ timeout: 5_000 });
     await expect(canvasTools.getByRole('button')).toHaveText([
       'Design',
@@ -558,34 +559,33 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Undo',
       'Redo',
       'Connections',
+      'Ask AI'
+    ]);
+    await expect(canvasNavigation.getByRole('button')).toHaveText([
       'Hand H',
-      'Fit all ⇧1',
-      'Reset ⇧0',
-      'Fit ⇧2',
-      'V',
-      '@ Ask AI'
+      'Fit flow ⇧1',
+      'Fit pages ⇧0',
+      'Fit selection ⇧2',
+      'V'
     ]);
     await expect(canvasTools.getByRole('button', { name: 'Design' })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
-    await expect(canvasTools.getByRole('button', { name: 'Hand', exact: true })).toHaveAttribute(
-      'aria-keyshortcuts',
-      'H'
-    );
-    await expect(canvasTools.getByRole('button', { name: 'Fit all', exact: true })).toHaveAttribute(
-      'aria-keyshortcuts',
-      'Shift+1'
-    );
-    await expect(canvasTools.getByRole('button', { name: 'Reset', exact: true })).toHaveAttribute(
-      'aria-keyshortcuts',
-      'Shift+0'
-    );
     await expect(
-      canvasTools.getByRole('button', { name: 'Fit selection', exact: true })
+      canvasNavigation.getByRole('button', { name: 'Hand', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'H');
+    await expect(
+      canvasNavigation.getByRole('button', { name: 'Fit all', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'Shift+1');
+    await expect(
+      canvasNavigation.getByRole('button', { name: 'Fit pages', exact: true })
+    ).toHaveAttribute('aria-keyshortcuts', 'Shift+0');
+    await expect(
+      canvasNavigation.getByRole('button', { name: 'Fit selection', exact: true })
     ).toHaveAttribute('aria-keyshortcuts', 'Shift+2');
     await expect(
-      canvasTools.getByRole('button', { name: 'Selection', exact: true })
+      canvasNavigation.getByRole('button', { name: 'Selection', exact: true })
     ).toHaveAttribute('aria-keyshortcuts', 'V');
     await expect(window.getByRole('button', { name: 'Flow', exact: true })).toHaveCount(0);
     await expect(window.getByRole('button', { name: 'Preview', exact: true })).toHaveCount(0);
@@ -812,7 +812,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(
       ordersArtboard
         .frameLocator('iframe[title="Orders screen preview"]')
-        .getByRole('heading', { name: 'Orders' })
+        .getByRole('heading', { name: 'Orders to watch' })
     ).toBeVisible({ timeout: 5_000 });
     await expect(ordersReferenceFrame).toHaveAttribute('tabindex', '-1');
     await expect(ordersReferenceFrame).toHaveAttribute(
@@ -875,7 +875,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     expect(openOrdersPhysical.hit).toBe('BUTTON');
     expect(openOrdersPhysical.withinCanvas).toBe(true);
     await window.mouse.click(openOrdersPhysical.center.x, openOrdersPhysical.center.y);
-    await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
+    await expect(canvas.locator('.canvas-workspace__status')).toContainText(
       'Opened saved scenario orders-default on the canvas (active: orders).',
       { timeout: 5_000 }
     );
@@ -885,16 +885,16 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(
       ordersArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Orders' })
+        .getByRole('heading', { name: 'Orders to watch' })
     ).toBeVisible({ timeout: 15_000 });
     const dashboardReference = canvas.locator('.react-flow__node[data-id="dashboard"]');
-    await expect(dashboardReference.getByRole('button', { name: 'Open Dashboard' })).toBeVisible();
-    await dashboardReference.getByRole('button', { name: 'Open Dashboard' }).focus();
+    await expect(dashboardReference.getByRole('button', { name: 'Open Overview' })).toBeVisible();
+    await dashboardReference.getByRole('button', { name: 'Open Overview' }).focus();
     await window.keyboard.press('Enter');
     await expect(
       activeArtboard
         .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Dashboard' })
+        .getByRole('heading', { name: 'Good work, in view.' })
     ).toBeVisible({ timeout: 15_000 });
     const readArtboardGeometry = (artboard: Locator) =>
       artboard.evaluate((node) => {
@@ -943,7 +943,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect
       .poll(async () => (await readSavedScreenPositions()).orders)
       .not.toEqual(savedPositionsBefore.orders);
-    await expect(canvas.locator('.canvas-workspace__toolbar output')).toContainText(
+    await expect(canvas.locator('.canvas-workspace__status')).toContainText(
       /Saved graph revision \d+\./
     );
     const persistedActivePosition = await readArtboardGeometry(activeArtboard);
@@ -1000,17 +1000,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     const activeLayerItem = canvas
       .getByLabel('Artboards')
       .locator('button:not(.canvas-workspace__layer-run)')
-      .filter({ hasText: 'Dashboard' });
+      .filter({ hasText: 'Overview' });
     await activeLayerItem.click();
     await expect(activeLayerItem).toHaveAttribute('aria-pressed', 'true');
     await canvas.getByRole('button', { name: 'Close pages and assets' }).click();
-    await canvasTools.getByRole('button', { name: 'Fit selection', exact: true }).click();
+    await canvasNavigation.getByRole('button', { name: 'Fit selection', exact: true }).click();
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
       .toBe(true);
-    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await canvasNavigation.getByRole('button', { name: 'Selection', exact: true }).click();
 
-    const handTool = canvasTools.getByRole('button', { name: /Hand/ });
+    const handTool = canvasNavigation.getByRole('button', { name: /Hand/ });
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'true');
     const handPosition = await activeArtboard.evaluate((artboard) => artboard.style.transform);
@@ -1061,11 +1061,10 @@ test('renders one compiled React artboard with prototype wiring on the unified d
 
     // Hand pan stays armed until it is toggled off. Restore the Design surface
     // and the selection tool before a live React click becomes compiler-mapped.
-    await canvasTools.getByRole('button', { name: 'Hand', exact: true }).click();
-    await expect(canvasTools.getByRole('button', { name: 'Hand', exact: true })).toHaveAttribute(
-      'aria-pressed',
-      'false'
-    );
+    await canvasNavigation.getByRole('button', { name: 'Hand', exact: true }).click();
+    await expect(
+      canvasNavigation.getByRole('button', { name: 'Hand', exact: true })
+    ).toHaveAttribute('aria-pressed', 'false');
     await canvasTools.getByRole('button', { name: 'Design', exact: true }).click();
     await expect(canvas).toHaveAttribute('data-mode', 'design');
     await expect(canvasTools.getByRole('button', { name: 'Design', exact: true })).toHaveAttribute(
@@ -1073,16 +1072,154 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'true'
     );
     // Threads begin only from a compiler-mapped element in the live artifact.
+    const acceptedCommentSurface = await launchedApplication.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0]!.getContentBounds()
+    );
+    await window.setViewportSize({
+      width: acceptedCommentSurface.width,
+      height: acceptedCommentSurface.height
+    });
+    await window.evaluate(async () => {
+      await document.fonts.ready;
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+    });
+    expect(await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({
+      width: acceptedCommentSurface.width,
+      height: acceptedCommentSurface.height
+    });
+    await canvasNavigation.getByRole('button', { name: 'Selection', exact: true }).click();
+    await canvasNavigation.getByRole('button', { name: 'Fit pages', exact: true }).click();
     const mappedCommentTarget = compiledArtboard
       .frameLocator('iframe[title="Generated React preview frame"]')
-      .getByRole('button', { name: 'Open orders', exact: true });
-    const mappedCommentBounds = await mappedCommentTarget.boundingBox();
-    if (!mappedCommentBounds)
-      throw new Error('The mapped artifact action must expose physical click bounds.');
-    await window.mouse.click(
-      mappedCommentBounds.x + mappedCommentBounds.width / 2,
-      mappedCommentBounds.y + mappedCommentBounds.height / 2
-    );
+      .getByRole('button', { name: 'View orders', exact: true });
+    const mappedFrame = compiledArtboard.locator('iframe[title="Generated React preview frame"]');
+    const mappedNodeId = await mappedCommentTarget.getAttribute('data-selene-node-id');
+    if (!mappedNodeId) throw new Error('The mapped action must expose its compiler node identity.');
+    const sourceBeforeCommentSelection = (
+      await window.evaluate(() => window.selene.designer.snapshot())
+    ).source;
+    let previousMappedGeometry = '';
+    let stableMappedGeometry = 0;
+    let mappedPoint: { x: number; y: number } | undefined;
+    let mappedOwner: 'bridge' | 'iframe' | undefined;
+    await expect
+      .poll(
+        async () => {
+          const [bounds, metrics, local, nativeBounds] = await Promise.all([
+            mappedFrame.boundingBox(),
+            mappedFrame.evaluate((node) => ({
+              offsetWidth: node.offsetWidth,
+              offsetHeight: node.offsetHeight,
+              clientLeft: node.clientLeft,
+              clientTop: node.clientTop,
+              identity: node.src
+            })),
+            mappedCommentTarget.evaluate((node, expectedId) => {
+              const rect = node.getBoundingClientRect();
+              const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+              return {
+                point,
+                hit:
+                  document
+                    .elementFromPoint(point.x, point.y)
+                    ?.closest('[data-selene-node-id]')
+                    ?.getAttribute('data-selene-node-id') === expectedId
+              };
+            }, mappedNodeId),
+            launchedApplication.evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows()[0]!.getContentBounds()
+            )
+          ]);
+          if (!bounds || !local.hit || metrics.offsetWidth === 0 || metrics.offsetHeight === 0)
+            return false;
+          const point = {
+            x:
+              bounds.x +
+              ((metrics.clientLeft + local.point.x) * bounds.width) / metrics.offsetWidth,
+            y:
+              bounds.y +
+              ((metrics.clientTop + local.point.y) * bounds.height) / metrics.offsetHeight
+          };
+          const owner = await mappedFrame.evaluate((element, location) => {
+            const hit = document.elementFromPoint(location.x, location.y);
+            if (hit === element) return 'iframe' as const;
+            const bridge = element.parentElement?.querySelector(
+              '[data-selene-native-input-bridge]'
+            );
+            return bridge && hit === bridge ? ('bridge' as const) : undefined;
+          }, point);
+          const sample = JSON.stringify({ bounds, metrics, local, nativeBounds });
+          stableMappedGeometry = sample === previousMappedGeometry ? stableMappedGeometry + 1 : 0;
+          previousMappedGeometry = sample;
+          mappedPoint = point;
+          mappedOwner = owner;
+          return (
+            owner !== undefined &&
+            point.x >= 0 &&
+            point.y >= 0 &&
+            point.x < nativeBounds.width &&
+            point.y < nativeBounds.height &&
+            stableMappedGeometry >= 3
+          );
+        },
+        { intervals: [80] }
+      )
+      .toBe(true);
+    if (!mappedPoint) throw new Error('The mapped action must expose a stable native click point.');
+    await mappedFrame.evaluate((element) => {
+      const targetWindow = element.ownerDocument.defaultView;
+      const bridge = element.parentElement?.querySelector('[data-selene-native-input-bridge]');
+      if (!targetWindow) throw new Error('Mapped action parent window is unavailable.');
+      const events: { type: string; trusted: boolean; owner: string | null }[] = [];
+      const capture = (event: Event) =>
+        events.push({
+          type: event.type,
+          trusted: event.isTrusted,
+          owner:
+            event.target === element
+              ? 'iframe'
+              : bridge && event.target === bridge
+                ? 'bridge'
+                : null
+        });
+      for (const type of ['pointerdown', 'click'])
+        targetWindow.addEventListener(type, capture, true);
+      Reflect.set(targetWindow, '__seleneFlowSelectionWitness', {
+        events,
+        cleanup: () => {
+          for (const type of ['pointerdown', 'click'])
+            targetWindow.removeEventListener(type, capture, true);
+        }
+      });
+    });
+    await mappedCommentTarget.evaluate((element) => {
+      const targetWindow = element.ownerDocument.defaultView;
+      if (!targetWindow) throw new Error('Mapped action child window is unavailable.');
+      const events: { type: string; trusted: boolean; nodeId: string | null }[] = [];
+      const capture = (event: Event) =>
+        events.push({
+          type: event.type,
+          trusted: event.isTrusted,
+          nodeId:
+            event.target instanceof Element
+              ? (event.target
+                  .closest('[data-selene-node-id]')
+                  ?.getAttribute('data-selene-node-id') ?? null)
+              : null
+        });
+      for (const type of ['pointerdown', 'click'])
+        targetWindow.addEventListener(type, capture, true);
+      Reflect.set(targetWindow, '__seleneFlowChildWitness', {
+        events,
+        cleanup: () => {
+          for (const type of ['pointerdown', 'click'])
+            targetWindow.removeEventListener(type, capture, true);
+        }
+      });
+    });
+    await window.mouse.click(mappedPoint.x, mappedPoint.y);
     const selectedElementActions = window.getByRole('toolbar', {
       name: 'Selected React element actions'
     });
@@ -1098,6 +1235,62 @@ test('renders one compiled React artboard with prototype wiring on the unified d
         };
       })
       .toEqual({ bridgeState: 'posted', selectionStage: 'authorized', toolbarCount: 1 });
+    const selectionWitness = await window.evaluate(() => {
+      const stored: unknown = Reflect.get(document.defaultView!, '__seleneFlowSelectionWitness');
+      if (!stored || typeof stored !== 'object')
+        throw new Error('Native selection witness missing.');
+      const events: unknown = Reflect.get(stored, 'events');
+      const cleanup: unknown = Reflect.get(stored, 'cleanup');
+      if (typeof cleanup === 'function') cleanup();
+      Reflect.deleteProperty(document.defaultView!, '__seleneFlowSelectionWitness');
+      return events;
+    });
+    const childWitness = await mappedCommentTarget.evaluate((element) => {
+      const targetWindow = element.ownerDocument.defaultView!;
+      const stored: unknown = Reflect.get(targetWindow, '__seleneFlowChildWitness');
+      if (!stored || typeof stored !== 'object') throw new Error('Child native witness missing.');
+      const events: unknown = Reflect.get(stored, 'events');
+      const cleanup: unknown = Reflect.get(stored, 'cleanup');
+      if (typeof cleanup === 'function') cleanup();
+      Reflect.deleteProperty(targetWindow, '__seleneFlowChildWitness');
+      return events;
+    });
+    const hasPair = (events: unknown, ownerKey: string, ownerValue: string) =>
+      Array.isArray(events) &&
+      ['pointerdown', 'click'].every((type) =>
+        events.some(
+          (event) =>
+            event &&
+            typeof event === 'object' &&
+            Reflect.get(event, 'type') === type &&
+            Reflect.get(event, 'trusted') === true &&
+            Reflect.get(event, ownerKey) === ownerValue
+        )
+      );
+    expect(
+      mappedOwner === 'bridge'
+        ? hasPair(selectionWitness, 'owner', 'bridge')
+        : hasPair(selectionWitness, 'owner', 'iframe') ||
+            hasPair(childWitness, 'nodeId', mappedNodeId)
+    ).toBe(true);
+    const commentSelection = await window.evaluate(() => window.selene.designer.snapshot());
+    expect(commentSelection.selectedNodeId).toBe(mappedNodeId);
+    expect(commentSelection.source).toEqual(sourceBeforeCommentSelection);
+    await testInfo.attach('mapped-comment-native-selection.json', {
+      body: JSON.stringify(
+        {
+          geometry: JSON.parse(previousMappedGeometry),
+          point: mappedPoint,
+          nodeId: mappedNodeId,
+          events: selectionWitness,
+          childEvents: childWitness,
+          inputOwner: mappedOwner
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json'
+    });
     await selectedElementActions.getByRole('button', { name: 'Comment', exact: true }).click();
     const reviewBody = 'Keep this workflow ready for the next review.';
     const reviewComposer = window.getByLabel('Stakeholder review thread body');
@@ -1154,7 +1347,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(selectedReviewPin).toHaveAttribute('aria-pressed', 'false');
     await handTool.click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'true');
-    await canvasTools.getByRole('button', { name: 'Selection', exact: true }).click();
+    await canvasNavigation.getByRole('button', { name: 'Selection', exact: true }).click();
     await expect(handTool).toHaveAttribute('aria-pressed', 'false');
     await expect
       .poll(async () => (await startupGeometry())?.fullyVisible.dashboard ?? false)
@@ -1172,7 +1365,7 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(
       presentedArtifact
         .frameLocator('iframe[title="Generated React preview frame"]')
-        .getByRole('heading', { name: 'Dashboard' })
+        .getByRole('heading', { name: 'Good work, in view.' })
     ).toBeVisible({ timeout: 15_000 });
     await expect(presentedArtifact).toHaveAttribute('data-preview-state', 'ready');
     await expect(window.locator('.react-flow')).toHaveCount(0);
@@ -1332,15 +1525,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     // compiled Dashboard → Orders transition; reference frames were removed
     // with the canvas and never receive a MessageChannel.
     await clickPresentedAction({
-      label: 'Open orders',
+      label: 'View orders',
       nodeId: 'dashboard',
       portId: 'open-orders'
     });
-    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders to watch' })).toBeVisible({
       timeout: 5_000
     });
-    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
-    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+    await clickPresentedAction({ label: 'Back to overview', nodeId: 'orders', portId: 'back' });
+    await expect(
+      presentedPrototype.getByRole('heading', { name: 'Good work, in view.' })
+    ).toBeVisible({
       timeout: 5_000
     });
     await capturePaintedPresentation(
@@ -1351,7 +1546,9 @@ test('renders one compiled React artboard with prototype wiring on the unified d
     await expect(presentation).toBeVisible();
     await expect(presentedArtifact).toBeVisible();
     await expectPresentationFillsViewport('Compact');
-    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+    await expect(
+      presentedPrototype.getByRole('heading', { name: 'Good work, in view.' })
+    ).toBeVisible({
       timeout: 5_000
     });
     const compactPresentationGeometry = await Promise.all([
@@ -1413,15 +1610,17 @@ test('renders one compiled React artboard with prototype wiring on the unified d
       'Presentation must either remove every editor toolbar/device/targeting overlay or hide it.'
     ).toBe(true);
     await clickPresentedAction({
-      label: 'Open orders',
+      label: 'View orders',
       nodeId: 'dashboard',
       portId: 'open-orders'
     });
-    await expect(presentedPrototype.getByRole('heading', { name: 'Orders' })).toBeVisible({
+    await expect(presentedPrototype.getByRole('heading', { name: 'Orders to watch' })).toBeVisible({
       timeout: 5_000
     });
-    await clickPresentedAction({ label: 'Back', nodeId: 'orders', portId: 'back' });
-    await expect(presentedPrototype.getByRole('heading', { name: 'Dashboard' })).toBeVisible({
+    await clickPresentedAction({ label: 'Back to overview', nodeId: 'orders', portId: 'back' });
+    await expect(
+      presentedPrototype.getByRole('heading', { name: 'Good work, in view.' })
+    ).toBeVisible({
       timeout: 5_000
     });
     const exitPresentation = presentation.getByRole('button', { name: /Exit/ });
@@ -1499,10 +1698,10 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
       originalSourceRevision
     );
     await expect(
-      dashboardFrame.getByRole('heading', { name: /^Dashboard(?: workspace)?$/ })
+      dashboardFrame.getByRole('heading', { name: 'Good work, in view.', exact: true })
     ).toBeVisible();
     await expect(canvas).toHaveAttribute('data-mode', 'design');
-    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    await canvas.getByRole('button', { name: 'Fit all', exact: true }).click();
     const dashboard = canvas.locator('.react-flow__node[data-id="dashboard"]');
     const dragEvidence = await dragArtboard(window, dashboard, { x: 45, y: 30 }, testInfo);
     await expect
@@ -1548,7 +1747,8 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
     await window.bringToFront();
     await destination.focus();
     await expect(destination).toBeFocused();
-    await window.keyboard.press('d');
+    await expect(destination.locator('option[value="dashboard"]')).toHaveText('Overview');
+    await window.keyboard.press('ArrowUp');
     await expect(destination).toHaveValue('dashboard');
     const saveConnection = editor.getByRole('button', { name: 'Save connection', exact: true });
     await saveConnection.focus();
@@ -1569,7 +1769,7 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
     await window.keyboard.press('Meta+Shift+z');
     await expect.poll(target).toBe('dashboard');
     await editor.getByRole('button', { name: 'Close connection editor', exact: true }).click();
-    await tools.getByRole('button', { name: 'Fit all', exact: true }).click();
+    await canvas.getByRole('button', { name: 'Fit all', exact: true }).click();
     const edge = canvas.locator(`.react-flow__edge[data-id="${originalConnection.id}"]`);
     await edge.focus();
     await window.keyboard.press('Enter');
@@ -1647,7 +1847,7 @@ test('persists integrated flow undo, redo, keyboard edits and pointer reconnecti
     await expect(editor).toBeHidden();
     await undo.click();
     await expect.poll(target).toBe('dashboard');
-    await expect(inspectDestination).toHaveText('Dashboard');
+    await expect(inspectDestination).toHaveText('Overview');
     await expect(editor).toBeHidden();
     await redo.click();
     await expect.poll(target).toBe('orders');

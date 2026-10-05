@@ -342,7 +342,13 @@ for (const story of cockpitStories) {
           throw new Error('Missing conversation rail allocation targets.');
         const bounds = (element: HTMLElement) => {
           const rect = element.getBoundingClientRect();
-          return { top: rect.top, bottom: rect.bottom, height: rect.height };
+          return {
+            top: rect.top,
+            bottom: rect.bottom,
+            height: rect.height,
+            left: rect.left,
+            right: rect.right
+          };
         };
         return {
           layout: bounds(layout),
@@ -352,6 +358,12 @@ for (const story of cockpitStories) {
           composer: bounds(composer),
           railClientHeight: rail.clientHeight,
           railScrollHeight: rail.scrollHeight,
+          railClientWidth: rail.clientWidth,
+          railScrollWidth: rail.scrollWidth,
+          bodyClientWidth: body.clientWidth,
+          bodyScrollWidth: body.scrollWidth,
+          bodyOverflowY: getComputedStyle(body).overflowY,
+          historyEmpty: history.hasAttribute('data-empty'),
           historyOverflowY: getComputedStyle(history).overflowY,
           composerOverflowY: getComputedStyle(composer).overflowY
         };
@@ -366,12 +378,101 @@ for (const story of cockpitStories) {
       expect(railAllocation.history.top).toBeGreaterThanOrEqual(railAllocation.body.top);
       expect(railAllocation.history.bottom).toBeLessThanOrEqual(railAllocation.composer.top);
       expect(railAllocation.composer.bottom).toBeLessThanOrEqual(railAllocation.body.bottom);
-      // Equal 1fr tracks can differ only by fractional CSS-pixel layout rounding.
-      expect(
-        Math.abs(railAllocation.history.height - railAllocation.composer.height)
-      ).toBeLessThanOrEqual(0.5);
-      expect(railAllocation.historyOverflowY).toBe('auto');
-      expect(railAllocation.composerOverflowY).toBe('auto');
+      // Studio history and composer have independent tracks. The rail body owns
+      // scrolling; both panels must remain bounded and their controls reachable.
+      expect(railAllocation.railScrollWidth).toBeLessThanOrEqual(
+        railAllocation.railClientWidth + 1
+      );
+      expect(railAllocation.bodyScrollWidth).toBeLessThanOrEqual(
+        railAllocation.bodyClientWidth + 1
+      );
+      expect(railAllocation.history.height).toBeGreaterThanOrEqual(
+        railAllocation.historyEmpty ? 1 : 100
+      );
+      expect(railAllocation.composer.height).toBeGreaterThan(0);
+      expect(railAllocation.bodyOverflowY).toBe('auto');
+      expect(railAllocation.historyOverflowY).toBe(
+        railAllocation.historyEmpty ? 'visible' : 'auto'
+      );
+      expect(railAllocation.composerOverflowY).toBe('visible');
+      const agent = page.getByRole('combobox', { name: 'Configured agent', exact: true });
+      const instruction = page.getByRole('textbox', { name: 'AI change instruction', exact: true });
+      const selectTarget = page.getByRole('button', { name: 'Select on canvas', exact: true });
+      const railBody = page.locator('.conversation-rail__body');
+      const beforeProbe = await railBody.evaluate((body) => ({
+        scrollTop: body.scrollTop,
+        scrollLeft: body.scrollLeft
+      }));
+      const focusedBeforeProbe = await page.evaluateHandle(() => document.activeElement);
+      try {
+        await [agent, instruction, selectTarget].reduce(async (previous, control) => {
+          await previous;
+          await expect(control).toBeVisible();
+          await expect(control).toBeEnabled();
+          await expect
+            .poll(async () => {
+              await page.keyboard.press('Tab');
+              return control.evaluate((element) => document.activeElement === element);
+            })
+            .toBe(true);
+          await expect(control).toBeFocused();
+          const reachability = await control.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            const hit = document.elementFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2
+            );
+            return {
+              top: bounds.top,
+              bottom: bounds.bottom,
+              left: bounds.left,
+              right: bounds.right,
+              height: bounds.height,
+              viewportWidth: window.innerWidth,
+              viewportHeight: window.innerHeight,
+              hit: hit !== null && (hit === element || element.contains(hit))
+            };
+          });
+          expect(reachability.height).toBeGreaterThanOrEqual(34);
+          expect(reachability.left).toBeGreaterThanOrEqual(0);
+          expect(reachability.left).toBeGreaterThanOrEqual(railAllocation.rail.left);
+          expect(reachability.right).toBeLessThanOrEqual(railAllocation.rail.right);
+          expect(reachability.right).toBeLessThanOrEqual(reachability.viewportWidth);
+          expect(reachability.top).toBeGreaterThanOrEqual(railAllocation.rail.top);
+          expect(reachability.bottom).toBeLessThanOrEqual(railAllocation.rail.bottom);
+          expect(reachability.bottom).toBeLessThanOrEqual(reachability.viewportHeight);
+          expect(reachability.hit).toBe(true);
+          if (control === instruction) {
+            expect(reachability.height).toBeGreaterThanOrEqual(64);
+            const originalInstruction = await instruction.inputValue();
+            try {
+              await instruction.press('ControlOrMeta+A');
+              await instruction.pressSequentially('Verify the current Orders layout.');
+              await expect(instruction).toHaveValue('Verify the current Orders layout.');
+            } finally {
+              await instruction.press('ControlOrMeta+A');
+              await instruction.press('Backspace');
+              if (originalInstruction !== '')
+                await instruction.pressSequentially(originalInstruction);
+              await expect(instruction).toHaveValue(originalInstruction);
+            }
+          }
+        }, Promise.resolve());
+      } finally {
+        try {
+          await focusedBeforeProbe.evaluate((element) => {
+            if (!(element instanceof HTMLElement))
+              throw new Error('The rail probe lost its original keyboard-focus target.');
+            element.focus({ preventScroll: true });
+          });
+          await railBody.evaluate((body, previous) => {
+            body.scrollTop = previous.scrollTop;
+            body.scrollLeft = previous.scrollLeft;
+          }, beforeProbe);
+        } finally {
+          await focusedBeforeProbe.dispose();
+        }
+      }
     }
     const ordersHeadingBox = await ordersFrame
       .getByRole('heading', { name: 'Orders', exact: true })
@@ -634,7 +735,7 @@ for (const story of cockpitStories) {
       );
       expect(initialEvidence.styles.conversationRail.overflowY).toBe('clip');
       expect(initialEvidence.styles.conversationHistory.overflowY).toBe('auto');
-      expect(initialEvidence.styles.conversationComposer.overflowY).toBe('auto');
+      expect(initialEvidence.styles.conversationComposer.overflowY).toBe('visible');
       expect(initialEvidence.styles.inspector.overflowY).toBe('auto');
       expect(initialEvidence.geometry.stage.top).toBeGreaterThanOrEqual(0);
       expect(initialEvidence.geometry.stage.bottom).toBeLessThanOrEqual(

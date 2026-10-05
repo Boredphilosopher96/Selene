@@ -4,6 +4,7 @@ import { Popover } from '@selene/ui/workspace';
 
 import type { ProjectOpenResult, RecentProject } from '../../../shared/designer-api';
 import { StudioIcon } from './studio-icon';
+import { ProjectPresentationError } from './project-presentation-error';
 import './studio-polish.css';
 
 type ProjectTemplate = 'blank' | 'dashboard' | 'review';
@@ -16,17 +17,18 @@ const projectTemplates: readonly {
   {
     id: 'dashboard',
     label: 'Dashboard',
-    description: 'React + TypeScript workspace with a dashboard starting screen.'
+    description:
+      'Operations dashboard with sample metrics, active work, and a connected orders screen.'
   },
   {
     id: 'review',
     label: 'Review',
-    description: 'React + TypeScript workspace prepared for a review starting screen.'
+    description: 'A welcome concept, review brief, and connected decision notes.'
   },
   {
     id: 'blank',
     label: 'Blank',
-    description: 'React + TypeScript workspace without a named starting workflow.'
+    description: 'A focused canvas with a source-editable heading and room for your own components.'
   }
 ];
 
@@ -73,6 +75,7 @@ export function ProjectLaunchpad({
   const recentHeadingId = useId();
   const createHeadingId = useId();
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
   const [projects, setProjects] = useState<readonly RecentProject[]>([]);
   const [recentState, setRecentState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [status, setStatus] = useState('Loading recent projects…');
@@ -142,6 +145,23 @@ export function ProjectLaunchpad({
 
   const projectActionsBlocked =
     busy !== undefined || checkingRecovery || recovery?.active !== false;
+  const presentProjectFailure = async (error: unknown, fallback: string): Promise<void> => {
+    if (!mounted.current) return;
+    setStatus(error instanceof ProjectPresentationError ? error.message : fallback);
+    if (!(error instanceof ProjectPresentationError)) return;
+    // First-run create/import leaves this launchpad mounted. The host's save
+    // succeeded, so refresh recents directly while the action still owns busy.
+    // The regular refresh guard would skip this read and strand the retry.
+    setRecentState('loading');
+    try {
+      const recent = await actions.listRecentProjects();
+      if (!mounted.current) return;
+      setProjects(recent);
+      setRecentState('ready');
+    } catch {
+      if (mounted.current) setRecentState('error');
+    }
+  };
   const openProject = async (project: RecentProject) => {
     if (busyRef.current || projectActionsBlocked) return;
     busyRef.current = true;
@@ -151,8 +171,8 @@ export function ProjectLaunchpad({
       if (!mounted.current) return;
       setStatus(`Opened ${project.name}.`);
       setPopoverOpen(false);
-    } catch {
-      if (mounted.current) setStatus(`Could not open ${project.name}.`);
+    } catch (error) {
+      await presentProjectFailure(error, `Could not open ${project.name}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -168,8 +188,8 @@ export function ProjectLaunchpad({
         await actions.createProject({ id: projectId(projectName), name: projectName, template })
       );
       if (mounted.current) setStatus(`Created ${projectName}.`);
-    } catch {
-      if (mounted.current) setStatus(`Could not create ${projectName}.`);
+    } catch (error) {
+      await presentProjectFailure(error, `Could not create ${projectName}.`);
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -187,8 +207,8 @@ export function ProjectLaunchpad({
       }
       await onProjectOpened(opened);
       if (mounted.current) setStatus(`Imported ${opened.receipt.name}.`);
-    } catch {
-      if (mounted.current) setStatus('Could not import the local project.');
+    } catch (error) {
+      await presentProjectFailure(error, 'Could not import the local project.');
     } finally {
       busyRef.current = false;
       if (mounted.current) setBusy(undefined);
@@ -219,7 +239,7 @@ export function ProjectLaunchpad({
       <header className="project-launchpad__zone-heading">
         <div>
           <p className="project-launchpad__eyebrow">
-            {mode === 'first-run' ? 'Continue locally' : 'Switch projects'}
+            {mode === 'first-run' ? 'Your workspace' : 'Switch projects'}
           </p>
           <h2 id={recentHeadingId}>Recent projects</h2>
         </div>
@@ -227,7 +247,7 @@ export function ProjectLaunchpad({
           <span className="sl-status-badge sl-status-badge--neutral">{projects.length} saved</span>
         ) : null}
       </header>
-      {mode === 'first-run' ? (
+      {mode === 'first-run' && projects.length > 0 ? (
         <label className="sl-field">
           <span className="sl-field__label">Search recent projects</span>
           <input
@@ -241,7 +261,11 @@ export function ProjectLaunchpad({
         </label>
       ) : null}
       <p aria-atomic="true" className="sl-field__help" role="status">
-        {checkingRecovery ? 'Verifying safe preview startup…' : status}
+        {checkingRecovery
+          ? 'Verifying safe preview startup…'
+          : mode === 'first-run' && status === 'No local projects yet.'
+            ? 'Projects are stored locally.'
+            : status}
       </p>
       {recentState === 'loading' ? (
         <div className="project-launchpad__loading" aria-hidden="true">
@@ -329,7 +353,7 @@ export function ProjectLaunchpad({
           <strong>Your next idea starts here</strong>
           <p>
             {mode === 'first-run'
-              ? 'No local projects yet. Start with a new project.'
+              ? 'Create a project to see it here, or import an existing local workspace.'
               : 'No recent projects yet.'}
           </p>
         </div>
@@ -338,6 +362,89 @@ export function ProjectLaunchpad({
         <p className="project-launchpad__empty">No recent projects match this search.</p>
       ) : null}
     </section>
+  );
+  const createZone = (
+    <form
+      aria-labelledby={createHeadingId}
+      className="project-launchpad__create"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void createProject();
+      }}
+    >
+      <header className="project-launchpad__zone-heading">
+        <div>
+          <p className="project-launchpad__eyebrow">Start fresh</p>
+          <h2 id={createHeadingId}>Create a project</h2>
+        </div>
+      </header>
+      <p className="project-launchpad__create-copy">
+        Choose a starting point, then create a local workspace you can refine privately.
+      </p>
+      <label className="sl-field">
+        <span className="sl-field__label">Project name</span>
+        <input
+          className="sl-field__control"
+          maxLength={120}
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+        />
+      </label>
+      <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
+        <legend>React + TypeScript starter</legend>
+        <p>A source-backed starting point. No packages are installed here.</p>
+        <div>
+          {projectTemplates.map((option) => (
+            <label
+              key={option.id}
+              className={`project-launchpad__template${template === option.id ? ' is-selected' : ''}`}
+            >
+              <input
+                checked={template === option.id}
+                name="project-template"
+                type="radio"
+                value={option.id}
+                onChange={() => setTemplate(option.id)}
+              />
+              <span
+                className={`project-launchpad__template-preview project-launchpad__template-preview--${option.id}`}
+                aria-hidden="true"
+              >
+                <i />
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="project-launchpad__template-copy">
+                <strong>{option.label}</strong>
+                <small>{option.description}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <div
+        aria-label="Project creation actions"
+        className="project-launchpad__actions"
+        role="group"
+      >
+        <button
+          className="sl-button sl-button--primary"
+          type="submit"
+          disabled={projectActionsBlocked || !name.trim()}
+        >
+          {busy === 'create' ? 'Creating…' : 'Create project'}
+        </button>
+        <button
+          className="sl-button sl-button--secondary"
+          type="button"
+          disabled={projectActionsBlocked}
+          onClick={() => void importProject()}
+        >
+          {busy === 'import' ? 'Importing…' : 'Import a local project'}
+        </button>
+      </div>
+    </form>
   );
   const content = (
     <section
@@ -356,10 +463,9 @@ export function ProjectLaunchpad({
                 Selene <small>DESIGN STUDIO</small>
               </span>
             </div>
-            <p className="project-launchpad__eyebrow">From intent to interface</p>
             <h1>Start a local project</h1>
             <p className="project-launchpad__subtitle">
-              Shape the experience. Explore every flow. Hand off real React.
+              A focused workspace for designing, reviewing and handing off real React.
             </p>
             <p className="project-launchpad__startup">{startupMessage}</p>
             <ul className="project-launchpad__principles" aria-label="Workspace principles">
@@ -374,119 +480,61 @@ export function ProjectLaunchpad({
               </li>
             </ul>
           </div>
-          <div className="project-launchpad__artwork" aria-hidden="true">
-            <div className="project-launchpad__artboard">
-              <span className="project-launchpad__artboard-top">
-                <i />
-                <i />
-                <i />
-              </span>
-              <div className="project-launchpad__artboard-content">
-                <span className="project-launchpad__artboard-sidebar" />
-                <div>
-                  <b />
-                  <span />
-                  <span />
-                  <span />
-                  <em />
-                  <em />
-                  <em />
-                </div>
+          <ol className="project-launchpad__journey" aria-label="Your workflow in Selene">
+            <li>
+              <span>01</span>
+              <div>
+                <strong>Design in context</strong>
+                <p>Edit real React and explore connected screens.</p>
               </div>
-            </div>
-            <div className="project-launchpad__artwork-note">
-              <StudioIcon name="check" /> Source-backed by design
-            </div>
-          </div>
+            </li>
+            <li>
+              <span>02</span>
+              <div>
+                <strong>Review every change</strong>
+                <p>Compare AI proposals before they become your source.</p>
+              </div>
+            </li>
+            <li>
+              <span>03</span>
+              <div>
+                <strong>Hand off with confidence</strong>
+                <p>Keep source, revision and design intent together.</p>
+              </div>
+            </li>
+          </ol>
         </header>
       ) : null}
       {mode === 'first-run' ? (
         <div className="project-launchpad__workspace">
           {recentZone}
-          <form
-            aria-labelledby={createHeadingId}
-            className="project-launchpad__create"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void createProject();
-            }}
-          >
-            <header className="project-launchpad__zone-heading">
-              <div>
-                <p className="project-launchpad__eyebrow">Start fresh</p>
-                <h2 id={createHeadingId}>Create a project</h2>
-              </div>
-            </header>
-            <p className="project-launchpad__create-copy">
-              Choose a starting point, then create a local workspace you can refine privately.
-            </p>
-            <label className="sl-field">
-              <span className="sl-field__label">Project name</span>
-              <input
-                className="sl-field__control"
-                maxLength={120}
-                value={name}
-                onChange={(event) => setName(event.currentTarget.value)}
-              />
-            </label>
-            <fieldset className="project-launchpad__templates" disabled={projectActionsBlocked}>
-              <legend>React + TypeScript starter</legend>
-              <p>A source-backed starting point. No packages are installed here.</p>
-              <div>
-                {projectTemplates.map((option) => (
-                  <label
-                    key={option.id}
-                    className={`project-launchpad__template${template === option.id ? ' is-selected' : ''}`}
-                  >
-                    <input
-                      checked={template === option.id}
-                      name="project-template"
-                      type="radio"
-                      value={option.id}
-                      onChange={() => setTemplate(option.id)}
-                    />
-                    <span
-                      className={`project-launchpad__template-preview project-launchpad__template-preview--${option.id}`}
-                      aria-hidden="true"
-                    >
-                      <i />
-                      <i />
-                      <i />
-                      <i />
-                    </span>
-                    <span className="project-launchpad__template-copy">
-                      <strong>{option.label}</strong>
-                      <small>{option.description}</small>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <div
-              aria-label="Project creation actions"
-              className="project-launchpad__actions"
-              role="group"
-            >
-              <button
-                className="sl-button sl-button--primary"
-                type="submit"
-                disabled={projectActionsBlocked || !name.trim()}
-              >
-                {busy === 'create' ? 'Creating…' : 'Create project'}
-              </button>
-              <button
-                className="sl-button sl-button--secondary"
-                type="button"
-                disabled={projectActionsBlocked}
-                onClick={() => void importProject()}
-              >
-                {busy === 'import' ? 'Importing…' : 'Import a local project'}
-              </button>
-            </div>
-          </form>
+          {createZone}
         </div>
       ) : null}
-      {mode === 'header' ? recentZone : null}
+      {mode === 'header' ? (
+        <div className="project-launchpad__switcher">
+          {recentZone}
+          <div className="project-launchpad__switcher-actions">
+            <button
+              className="sl-button sl-button--secondary"
+              type="button"
+              aria-expanded={showCreate}
+              onClick={() => setShowCreate((current) => !current)}
+            >
+              {showCreate ? 'Back to recent projects' : 'New project'}
+            </button>
+            <button
+              className="sl-button sl-button--secondary"
+              type="button"
+              disabled={projectActionsBlocked}
+              onClick={() => void importProject()}
+            >
+              {busy === 'import' ? 'Importing…' : 'Import project'}
+            </button>
+          </div>
+          {showCreate ? createZone : null}
+        </div>
+      ) : null}
     </section>
   );
 

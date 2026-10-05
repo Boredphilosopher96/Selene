@@ -37,9 +37,9 @@ import { BunViteReactGeneratedProjectTemplate } from './generated-project-templa
 import { createEmbeddedGeneratedProjectToolchainPort } from './generated-project-toolchain';
 import {
   DesktopDesignerApplicationService,
-  DeterministicDesignerFixtureAdapter,
-  createInitialWorkspace
+  DeterministicDesignerFixtureAdapter
 } from './designer-service';
+import { createStarterWorkspace } from './starter-workspace';
 import { FileLocalCollaborationAuthorPort } from './local-collaboration-author';
 import {
   JsonPrototypeGraphPersistencePort,
@@ -65,6 +65,7 @@ import {
   type BoundPreviewBuildIdentity
 } from './bound-preview-build-coordinator';
 import { CurrentPreviewBuildAuthority } from './preview-build-authority';
+import { PreviewBuildLeaseAuthority, type ClaimedPreviewBuildLease } from './preview-build-lease';
 import { CompilerBoundManualReactEditTransactionPort } from './manual-react-edit-transaction';
 import { activateReactBindingAfterPreviewPublication } from './react-binding-activation';
 import { createElectronOidcLogin, type ElectronOidcLogin } from './oidc';
@@ -209,6 +210,7 @@ const designSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry();
 const compiler = new ViteReactCompilerPort(designSystemCompilerRegistry);
 const previewBuildCoordinator = new BoundPreviewBuildCoordinator(compiler);
 const activePreviewBuilds = new Map<number, AbortController>();
+const previewBuildLeases = new PreviewBuildLeaseAuthority();
 const localStoryCompilerPolicy = () => {
   const modules = [...designSystemCompilerRegistry.snapshot().values()].sort((left, right) =>
     left.moduleSpecifier.localeCompare(right.moduleSpecifier, 'en')
@@ -482,58 +484,7 @@ async function initializeDesktopDiagnostics(): Promise<void> {
       designer.createManualEditPersistencePort()
     )
   );
-  projectSetup = new DesktopProjectSetup(localLifecycle, (projectId, template) => {
-    const workspace = createInitialWorkspace(projectId);
-    const heading =
-      template === 'review'
-        ? 'Review workspace'
-        : template === 'dashboard'
-          ? 'Dashboard workspace'
-          : 'Blank workspace';
-    return {
-      ...workspace,
-      files: workspace.files.map((file) =>
-        file.path === 'src/preview-data.json'
-          ? {
-              ...file,
-              content: JSON.stringify(
-                {
-                  format: 'selene-desktop-preview-data/v1',
-                  initialScreenId: 'dashboard',
-                  screens: [
-                    {
-                      id: 'dashboard',
-                      route: '/',
-                      title: heading,
-                      summary: `${template} template`,
-                      action: 'Open orders',
-                      actionPort: 'open-orders',
-                      nextScreenId: 'orders'
-                    },
-                    {
-                      id: 'orders',
-                      route: '/orders',
-                      title: 'Orders',
-                      summary: 'Template orders view',
-                      action: 'Back',
-                      actionPort: 'back',
-                      nextScreenId: 'dashboard'
-                    }
-                  ]
-                },
-                null,
-                2
-              )
-            }
-          : file
-      ),
-      revision: {
-        ...workspace.revision,
-        id: `${projectId}-${template}-r1`,
-        summary: `${heading} template`
-      }
-    };
-  });
+  projectSetup = new DesktopProjectSetup(localLifecycle, createStarterWorkspace);
   await diagnostics.initialize();
   const hydration = await designer.hydratePrototypeGraph();
   if (hydration.state === 'recovery-required')
@@ -1137,6 +1088,7 @@ function createWindow(): void {
     unsubscribeProgress();
     activePreviewBuilds.get(rendererId)?.abort();
     activePreviewBuilds.delete(rendererId);
+    previewBuildLeases.close(rendererId);
     storyPreviewAuthority.cancel(rendererId);
   });
 
@@ -1148,22 +1100,40 @@ function createWindow(): void {
     workspace: ReactSourceWorkspace,
     activateCanonicalBinding: boolean,
     identity?: BoundPreviewBuildIdentity,
-    revalidate?: () => void
+    revalidate?: () => void,
+    lease?: ClaimedPreviewBuildLease
   ) => {
+    lease?.assertActive();
     const previous = activePreviewBuilds.get(event.sender.id);
     previous?.abort();
     const controller = new AbortController();
     activePreviewBuilds.set(event.sender.id, controller);
+    const onLeaseAbort = () => controller.abort();
+    lease?.signal.addEventListener('abort', onLeaseAbort, { once: true });
+    if (lease?.signal.aborted) controller.abort();
     try {
       const artifact =
         identity === undefined
           ? await compiler.compile(workspace, controller.signal)
-          : await previewBuildCoordinator.build({ identity, workspace }, controller.signal);
+          : await previewBuildCoordinator.build(
+              {
+                identity,
+                workspace,
+                ...(lease === undefined ? {} : { assertActive: lease.assertActive })
+              },
+              controller.signal
+            );
+      if (controller.signal.aborted)
+        throw new Error(
+          'Preview compilation timed out or was cancelled; render the current revision to retry.'
+        );
+      lease?.assertActive();
       if (artifact.diagnostics.length > 0)
         throw new Error(artifact.diagnostics.map((issue) => issue.message).join('\n'));
       if (artifact.receipt === undefined)
         throw new Error('Preview compiler did not issue a build receipt.');
       revalidate?.();
+      lease?.assertActive();
       const policy = createPreviewSecurityPolicy(
         'selene-preview://local',
         randomBytes(24).toString('base64url')
@@ -1182,22 +1152,38 @@ function createWindow(): void {
         );
       return identity === undefined ? published : { ...published, ...identity };
     } finally {
+      lease?.signal.removeEventListener('abort', onLeaseAbort);
+      lease?.release();
       if (activePreviewBuilds.get(event.sender.id) === controller)
         activePreviewBuilds.delete(event.sender.id);
     }
   };
+  ipcMain.removeHandler('selene:preview-build-reserve');
+  ipcMain.handle('selene:preview-build-reserve', (event, value: unknown) => {
+    if (!isMainRendererFrame(window, event))
+      throw new Error('Preview build reservations require the main renderer frame');
+    if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
+    const resolved = previewBuildAuthority.resolve(value);
+    return previewBuildLeases.reserve(event.sender.id, resolved.ticket);
+  });
+  ipcMain.removeAllListeners('selene:preview-build-cancel');
+  ipcMain.on('selene:preview-build-cancel', (event, leaseId: unknown) => {
+    if (isMainRendererFrame(window, event)) previewBuildLeases.cancel(event.sender.id, leaseId);
+  });
   ipcMain.removeHandler('selene:preview-build');
-  ipcMain.handle('selene:preview-build', async (event, value: unknown) => {
+  ipcMain.handle('selene:preview-build', async (event, value: unknown, leaseId: unknown) => {
     if (!isMainRendererFrame(window, event))
       throw new Error('Preview builds require the main renderer frame');
     if (safeMode) throw new Error('Preview builds are disabled while crash recovery is active');
     const resolved = previewBuildAuthority.resolve(value);
+    const lease = previewBuildLeases.claim(event.sender.id, leaseId, resolved.ticket);
     return buildAndPublishPreview(
       event,
       resolved.workspace,
       true,
       resolved.identity,
-      () => void previewBuildAuthority.resolve(value)
+      () => void previewBuildAuthority.resolve(value),
+      lease
     );
   });
   ipcMain.removeHandler('selene:preview-build-ai-proposal');

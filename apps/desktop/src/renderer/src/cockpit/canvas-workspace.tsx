@@ -55,6 +55,7 @@ import {
   catalogEntryCanDrag,
   catalogInsertAvailability,
   projectGraphEdges,
+  reciprocalEdgeLabelOffsets,
   type CanvasConnectionSelectionObservation,
   type CatalogInsertTarget
 } from './canvas-workspace-model';
@@ -147,6 +148,8 @@ interface CanvasWorkspaceProps {
   readonly artifactFocusRequest?: CanvasArtifactFocusRequest;
   readonly mode: CanvasWorkspaceMode;
   readonly readOnly: boolean;
+  /** True only through the host prototype transition and trusted paint receipt. */
+  readonly presentationPending?: boolean;
   readonly saveStatus: string;
   /** Parent-owned rail geometry fence; changes reframe only after resizing settles. */
   readonly viewportLayoutKey: string;
@@ -821,6 +824,7 @@ export function CanvasWorkspace({
   referencePreviews,
   mode,
   readOnly,
+  presentationPending = false,
   saveStatus,
   viewportLayoutKey,
   selectionClearEpoch,
@@ -1684,29 +1688,39 @@ export function CanvasWorkspace({
       if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
     };
   }, [activeId, fitInitialArtboard, mode, viewportLayoutKey]);
-  const graphEdges = useMemo<Edge[]>(
-    () =>
-      mode !== 'design'
-        ? []
-        : graph.transitions
-            .filter((transition) => 'to' in transition)
-            .map((transition) => {
-              const port = graph.nodes
-                .find((node) => node.id === transition.from.nodeId)
-                ?.ports.find((item) => item.id === transition.from.portId);
-              return {
-                id: transition.id,
-                source: transition.from.nodeId,
-                sourceHandle: transition.from.portId,
-                target: transitionTarget(transition),
-                label: port?.label ?? transition.kind,
-                markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc' },
-                className: 'canvas-prototype-edge',
-                style: { stroke: '#6d5dfc', strokeWidth: 2 }
-              };
-            }),
-    [graph.nodes, graph.transitions, mode]
-  );
+  const graphEdges = useMemo<Edge[]>(() => {
+    if (mode !== 'design') return [];
+    const transitions = graph.transitions.filter((transition) => 'to' in transition);
+    const labelOffsets = reciprocalEdgeLabelOffsets(
+      transitions.map((transition) => ({
+        id: transition.id,
+        source: transition.from.nodeId,
+        target: transitionTarget(transition)
+      }))
+    );
+    return transitions.map((transition) => {
+      const port = graph.nodes
+        .find((node) => node.id === transition.from.nodeId)
+        ?.ports.find((item) => item.id === transition.from.portId);
+      const labelOffset = labelOffsets.get(transition.id) ?? 0;
+      return {
+        id: transition.id,
+        source: transition.from.nodeId,
+        sourceHandle: transition.from.portId,
+        target: transitionTarget(transition),
+        label: port?.label ?? transition.kind,
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#6d5dfc' },
+        className: 'canvas-prototype-edge',
+        style: { stroke: '#6d5dfc', strokeWidth: 2 },
+        ...(labelOffset === 0
+          ? {}
+          : {
+              labelStyle: { transform: `translateY(${labelOffset}px)` },
+              labelBgStyle: { transform: `translateY(${labelOffset}px)` }
+            })
+      };
+    });
+  }, [graph.nodes, graph.transitions, mode]);
   const [edges, setEdges] = useState<Edge[]>(graphEdges);
   const edgeProjectFence = useRef(projectFence);
   useEffect(() => {
@@ -2087,9 +2101,9 @@ export function CanvasWorkspace({
     };
   }, [applyShortcut]);
   useEffect(() => {
-    if (mode !== 'present' || readOnly) return;
+    if (mode !== 'present') return;
     requestAnimationFrame(() => presentExit.current?.focus());
-  }, [mode, readOnly]);
+  }, [mode]);
   useEffect(() => {
     if (mode !== 'present') return;
     const exitFromTrustedPreview = () => {
@@ -2127,13 +2141,26 @@ export function CanvasWorkspace({
 
   if (mode === 'present')
     return (
-      <section className="canvas-presentation" aria-label="Prototype presentation">
+      <section
+        className="canvas-presentation"
+        aria-label="Prototype presentation"
+        aria-busy={presentationPending || undefined}
+        data-pending={presentationPending || undefined}
+        data-read-only={readOnly || presentationPending || undefined}
+      >
         <CanvasPreviewContext.Provider value={preview}>
-          <div className="canvas-presentation__artifact">{preview}</div>
+          <div
+            className="canvas-presentation__artifact"
+            inert={readOnly || presentationPending || undefined}
+          >
+            {preview}
+          </div>
         </CanvasPreviewContext.Provider>
         <output className="canvas-presentation__status" aria-live="polite">
           {safeDesignerNotice(
-            saveStatus,
+            readOnly && !presentationPending
+              ? 'Prototype interaction is unavailable. Use Exit to return to Design.'
+              : saveStatus,
             'Presentation status is unavailable. Try Exit to return to the editor.'
           )}
         </output>
@@ -2141,7 +2168,6 @@ export function CanvasWorkspace({
           className="canvas-presentation__exit"
           ref={presentExit}
           type="button"
-          disabled={readOnly}
           onClick={(event) => void onModeChange('design', event.currentTarget)}
         >
           Exit
@@ -2218,25 +2244,29 @@ export function CanvasWorkspace({
                     type="button"
                     data-graph-history
                     aria-label="Undo flow change"
+                    title="Undo flow change (⌘/Ctrl+Z)"
                     aria-keyshortcuts="Meta+Z Control+Z"
                     disabled={graphPending || graphHistory.past.length === 0}
                     onClick={() => applyFlowHistory.current('undo')}
                   >
-                    <StudioIcon name="undo" /> Undo
+                    <StudioIcon name="undo" /> <span className="studio-sr-only">Undo</span>
                   </button>
                   <button
                     type="button"
                     data-graph-history
                     aria-label="Redo flow change"
+                    title="Redo flow change (⌘/Ctrl+Shift+Z)"
                     aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z"
                     disabled={graphPending || graphHistory.future.length === 0}
                     onClick={() => applyFlowHistory.current('redo')}
                   >
-                    <StudioIcon name="redo" /> Redo
+                    <StudioIcon name="redo" /> <span className="studio-sr-only">Redo</span>
                   </button>
                   <button
                     type="button"
                     ref={connectionEditorTrigger}
+                    aria-label="Connections"
+                    title="Edit prototype connections"
                     aria-expanded={connectionEditorOpen}
                     aria-controls="canvas-connection-editor"
                     onClick={() => {
@@ -2245,84 +2275,118 @@ export function CanvasWorkspace({
                       setConnectionEditorOpen((open) => !open);
                     }}
                   >
-                    <StudioIcon name="connections" /> Connections
+                    <StudioIcon name="connections" />{' '}
+                    <span className="studio-sr-only">Connections</span>
                   </button>
                 </div>
               ) : null}
-              <div
-                className="canvas-workspace__tool-group"
-                role="group"
-                aria-label="Canvas navigation"
-              >
-                <button
-                  type="button"
-                  aria-pressed={handTool}
-                  aria-keyshortcuts="H"
-                  onClick={() => {
-                    clearCanvasSelection();
-                    setHandTool((current) => !current);
-                  }}
-                >
-                  <StudioIcon name="hand" /> Hand <kbd>H</kbd>
-                </button>
-                <button
-                  type="button"
-                  aria-keyshortcuts="Shift+1"
-                  data-canvas-command="fit-all"
-                  onClick={() => {
-                    clearCanvasSelection();
-                    void fitAll();
-                  }}
-                >
-                  <StudioIcon name="fit" /> Fit all <kbd>⇧1</kbd>
-                </button>
-                <button
-                  type="button"
-                  aria-keyshortcuts="Shift+0"
-                  onClick={() => void fitArtboards()}
-                >
-                  Reset <kbd>⇧0</kbd>
-                </button>
-                <button
-                  type="button"
-                  aria-label="Fit selection"
-                  aria-keyshortcuts="Shift+2"
-                  data-canvas-command="fit-selection"
-                  title="Fit selection (Shift+2)"
-                  onClick={() => void fitSelection()}
-                >
-                  Fit <kbd>⇧2</kbd>
-                </button>
-                <button
-                  className="canvas-workspace__selection-tool"
-                  type="button"
-                  aria-label="Selection"
-                  aria-keyshortcuts="V"
-                  data-canvas-command="selection-tool"
-                  title="Selection tool (V)"
-                  onClick={activateSelectionTool}
-                >
-                  <svg aria-hidden="true" viewBox="0 0 16 16">
-                    <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
-                  </svg>
-                  <kbd>V</kbd>
-                </button>
-              </div>
               <button
                 className="canvas-workspace__ask-ai"
                 type="button"
+                aria-label="Ask AI"
+                title="Choose an element for an AI change"
                 disabled={!canRequestAiTarget}
                 onClick={(event) => {
                   setHandTool(false);
                   onRequestAiTarget(event.currentTarget);
                 }}
               >
-                <StudioIcon name="sparkles" /> @ Ask AI
+                <StudioIcon name="sparkles" />{' '}
+                <span className="canvas-workspace__action-label">Ask AI</span>
               </button>
             </>
           ) : null}
         </div>
+        {onOpenAi || onOpenInspector ? (
+          <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
+            {onOpenAi ? (
+              <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
+                <StudioIcon name="sparkles" />{' '}
+                <span className="canvas-workspace__panel-label">AI</span>
+              </button>
+            ) : null}
+            {onOpenInspector ? (
+              <button
+                type="button"
+                ref={inspectorTriggerRef}
+                aria-label="Open Dev Inspect"
+                onClick={onOpenInspector}
+              >
+                <StudioIcon name="inspect" />{' '}
+                <span className="canvas-workspace__panel-label">Inspect</span>
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </header>
+      <footer className="canvas-workspace__footer" data-canvas-overlay-interaction>
+        {surface === 'canvas' ? (
+          <div
+            className="canvas-workspace__tool-group canvas-workspace__navigation"
+            role="toolbar"
+            aria-label="Canvas navigation"
+          >
+            <button
+              type="button"
+              aria-pressed={handTool}
+              aria-keyshortcuts="H"
+              onClick={() => {
+                clearCanvasSelection();
+                setHandTool((current) => !current);
+              }}
+            >
+              <StudioIcon name="hand" /> Hand <kbd>H</kbd>
+            </button>
+            <button
+              type="button"
+              aria-keyshortcuts="Shift+1"
+              aria-label="Fit all"
+              title="Fit the complete flow, including states and connections (Shift+1)"
+              data-canvas-command="fit-all"
+              onClick={() => {
+                clearCanvasSelection();
+                void fitAll();
+              }}
+            >
+              <StudioIcon name="fit" /> Fit flow <kbd>⇧1</kbd>
+            </button>
+            <button
+              type="button"
+              aria-label="Fit pages"
+              aria-keyshortcuts="Shift+0"
+              title="Fit all pages (Shift+0)"
+              onClick={() => void fitArtboards()}
+            >
+              Fit pages <kbd>⇧0</kbd>
+            </button>
+            <button
+              type="button"
+              aria-label="Fit selection"
+              aria-keyshortcuts="Shift+2"
+              data-canvas-command="fit-selection"
+              title="Fit selection (Shift+2)"
+              onClick={() => void fitSelection()}
+            >
+              Fit selection <kbd>⇧2</kbd>
+            </button>
+            <button
+              className="canvas-workspace__selection-tool"
+              type="button"
+              aria-label="Selection"
+              aria-keyshortcuts="V"
+              data-canvas-command="selection-tool"
+              title="Selection tool (V)"
+              onClick={activateSelectionTool}
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16">
+                <path d="M3 2.25v10.4l2.45-2.2 1.7 3.3 1.65-.85-1.65-3.2 3.3-.35L3 2.25Z" />
+              </svg>
+              <kbd>V</kbd>
+            </button>
+          </div>
+        ) : null}
         <output
+          className="canvas-workspace__status"
           aria-live="polite"
           data-error={canvasError !== undefined || undefined}
           title={safeDesignerNotice(
@@ -2335,26 +2399,7 @@ export function CanvasWorkspace({
             'Canvas status is unavailable. Try saving the canvas change again.'
           )}
         </output>
-        {onOpenAi || onOpenInspector ? (
-          <div className="canvas-workspace__workspace-actions" aria-label="Workspace panels">
-            {onOpenAi ? (
-              <button type="button" aria-label="Open AI conversation" onClick={onOpenAi}>
-                <StudioIcon name="sparkles" /> AI
-              </button>
-            ) : null}
-            {onOpenInspector ? (
-              <button
-                type="button"
-                ref={inspectorTriggerRef}
-                aria-label="Open Dev Inspect"
-                onClick={onOpenInspector}
-              >
-                <StudioIcon name="inspect" /> Inspect
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </header>
+      </footer>
       {proposalReview && surface === 'canvas' ? (
         <aside
           className="canvas-workspace__proposal-review"

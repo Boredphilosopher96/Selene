@@ -142,7 +142,10 @@ declare global {
         savePrototypeGraph(graph: unknown): Promise<DesignerSnapshot>;
         retryPrototypeGraphHydration(): Promise<DesignerSnapshot>;
         recoverPrototypeGraphFromFixture(): Promise<DesignerSnapshot>;
-        setPrototypeMode(mode: 'edit' | 'run'): Promise<DesignerSnapshot>;
+        setPrototypeMode(
+          mode: 'edit' | 'run',
+          expectedProjectId?: string
+        ): Promise<DesignerSnapshot>;
         startPrototypeScenario(
           request: import('../../shared/designer-api').PrototypeScenarioStartInput
         ): Promise<DesignerSnapshot>;
@@ -248,8 +251,13 @@ declare global {
         onProgress(listener: (progress: DesignerProgress) => void): () => void;
       };
       readonly preview: {
-        build(
+        reserveBuild(
           ticket: import('../../shared/designer-api').PreviewBuildTicket
+        ): Promise<import('../../shared/designer-api').PreviewBuildLease>;
+        cancelBuild(leaseId: string): void;
+        build(
+          ticket: import('../../shared/designer-api').PreviewBuildTicket,
+          leaseId: string
         ): Promise<import('../../shared/designer-api').PreviewBuildResult>;
         buildAIProposal(input: AIProposalDecisionInput): Promise<{
           url: string;

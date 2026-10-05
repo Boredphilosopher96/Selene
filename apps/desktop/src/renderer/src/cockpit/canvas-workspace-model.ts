@@ -125,6 +125,24 @@ export interface CanvasGraphEdge {
   readonly selected?: boolean;
 }
 
+/** Opposite-direction wires share a path midpoint. Keep their text and
+ * backing plates on deterministic separate lanes without changing topology. */
+export function reciprocalEdgeLabelOffsets(
+  edges: readonly Readonly<{ id: string; source: string; target: string }>[]
+): ReadonlyMap<string, number> {
+  const directions = new Set(edges.map(({ source, target }) => JSON.stringify([source, target])));
+  return new Map(
+    edges.map(({ id, source, target }) => [
+      id,
+      source !== target && directions.has(JSON.stringify([target, source]))
+        ? source < target
+          ? -22
+          : 22
+        : 0
+    ])
+  );
+}
+
 export interface CanvasConnectionSelectionObservation {
   readonly projectFence: string;
   readonly selectedEdgeId: string;

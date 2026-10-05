@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   isActivePreviewFrameEvent,
+  DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
   previewPresentationIdentityKey,
@@ -17,11 +18,13 @@ import {
 class FakeClock implements PreviewPresentationClock {
   public readonly tasks = new Map<number, () => void>();
   public readonly cancelled: number[] = [];
+  public readonly delays: number[] = [];
   private next = 0;
 
-  public schedule(task: () => void): number {
+  public schedule(task: () => void, delayMs: number): number {
     this.next += 1;
     this.tasks.set(this.next, task);
+    this.delays.push(delayMs);
     return this.next;
   }
 
@@ -51,6 +54,16 @@ const receipt: PreviewPresentationReceipt = {
   identity: identity('orders-r2'),
   visible: true
 };
+
+function deferred<Output>() {
+  let resolve!: (value: Output) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<Output>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
 
 interface PreviewSettlementSnapshot extends ProjectRevisionSnapshot {
   readonly selectedNodeId?: string;
@@ -229,6 +242,182 @@ describe('preview presentation coordinator', () => {
 });
 
 describe('preview refresh receipt coordination', () => {
+  it('bounds a never-settling compile, aborts its host signal, and permits a fresh retry', async () => {
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    const present = vi.fn(async () => receipt);
+    const retarget = vi.fn(async (accepted: typeof snapshot) => accepted);
+    let compileSignal: AbortSignal | undefined;
+    const pending = refreshPreviewRevision({
+      snapshot,
+      signal: controller.signal,
+      compileClock: clock,
+      compile: (_accepted, signal) => {
+        compileSignal = signal;
+        return new Promise<ReturnType<typeof identity>>(() => undefined);
+      },
+      present,
+      selection: { intent: 'authoring', retarget }
+    });
+    const failure = expect(pending).rejects.toMatchObject({
+      code: 'compile-timeout',
+      revisionId: 'orders-r2'
+    });
+    expect(clock.delays).toEqual([DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS]);
+    expect(compileSignal?.aborted).toBe(false);
+    clock.fire();
+    await failure;
+    expect(compileSignal?.aborted).toBe(true);
+    expect(clock.tasks.size).toBe(0);
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(present).not.toHaveBeenCalled();
+    expect(retarget).not.toHaveBeenCalled();
+
+    await expect(
+      refreshPreviewRevision({
+        snapshot,
+        compileClock: clock,
+        compile: async () => identity('orders-r2'),
+        present,
+        selection: { intent: 'authoring', retarget }
+      })
+    ).resolves.toMatchObject({ snapshot, receipt });
+    expect(present).toHaveBeenCalledOnce();
+    expect(retarget).toHaveBeenCalledOnce();
+    expect(clock.tasks.size).toBe(0);
+  });
+
+  it('immediately releases a held compile on abort without waiting for its adapter', async () => {
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    const present = vi.fn(async () => receipt);
+    let compileSignal: AbortSignal | undefined;
+    const pending = refreshPreviewRevision({
+      snapshot,
+      signal: controller.signal,
+      compileClock: clock,
+      compile: (_accepted, signal) => {
+        compileSignal = signal;
+        return new Promise<ReturnType<typeof identity>>(() => undefined);
+      },
+      present,
+      selection: { intent: 'presentation' }
+    });
+    const failure = expect(pending).rejects.toMatchObject({ code: 'refresh-aborted' });
+    controller.abort();
+    await failure;
+    expect(compileSignal?.aborted).toBe(true);
+    expect(clock.tasks.size).toBe(0);
+    expect(removeListener).toHaveBeenCalledOnce();
+    expect(present).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['timeout', 'resolve'],
+    ['timeout', 'reject'],
+    ['abort', 'resolve'],
+    ['abort', 'reject']
+  ] as const)(
+    'fences a late compile %s/%s after a same-revision retry has already presented',
+    async (abandonment, settlement) => {
+      const clock = new FakeClock();
+      const controller = new AbortController();
+      const held = deferred<ReturnType<typeof identity>>();
+      const published: ReturnType<typeof identity>[] = [];
+      const present = async (build: ReturnType<typeof identity>) => {
+        published.push(build);
+        return { identity: build, visible: true as const };
+      };
+      const first = refreshPreviewRevision({
+        snapshot,
+        signal: controller.signal,
+        compileClock: clock,
+        compile: () => held.promise,
+        present,
+        selection: { intent: 'presentation' }
+      });
+      const failure = expect(first).rejects.toMatchObject({
+        code: abandonment === 'timeout' ? 'compile-timeout' : 'refresh-aborted'
+      });
+      if (abandonment === 'timeout') clock.fire();
+      else controller.abort();
+      await failure;
+
+      const fresh = identity('orders-r2', 'nonce-fresh', 'preview:fresh');
+      await expect(
+        refreshPreviewRevision({
+          snapshot,
+          compileClock: clock,
+          compile: async () => fresh,
+          present,
+          selection: { intent: 'presentation' }
+        })
+      ).resolves.toMatchObject({ build: fresh });
+
+      if (settlement === 'resolve') held.resolve(identity('orders-r2', 'nonce-abandoned'));
+      else held.reject(new Error('late abandoned compiler failure'));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(published).toEqual([fresh]);
+      expect(clock.tasks.size).toBe(0);
+    }
+  );
+
+  it('does not invoke the compiler for a refresh cancelled before it starts', async () => {
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    const compile = vi.fn(async () => identity('orders-r2'));
+    controller.abort();
+    await expect(
+      refreshPreviewRevision({
+        snapshot,
+        signal: controller.signal,
+        compileClock: clock,
+        compile,
+        present: async () => receipt,
+        selection: { intent: 'presentation' }
+      })
+    ).rejects.toMatchObject({ code: 'refresh-aborted' });
+    expect(compile).not.toHaveBeenCalled();
+    expect(clock.tasks.size).toBe(0);
+  });
+
+  it('cleans the deadline and abort listener on a synchronous adapter failure', async () => {
+    const clock = new FakeClock();
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    await expect(
+      refreshPreviewRevision({
+        snapshot,
+        signal: controller.signal,
+        compileClock: clock,
+        compile: () => {
+          throw new Error('host unavailable');
+        },
+        present: async () => receipt,
+        selection: { intent: 'presentation' }
+      })
+    ).rejects.toMatchObject({ code: 'compile-failed' });
+    expect(clock.tasks.size).toBe(0);
+    expect(removeListener).toHaveBeenCalledOnce();
+  });
+
+  it('rejects compile deadlines that would relax the production wait budget', async () => {
+    const compile = vi.fn(async () => identity('orders-r2'));
+    await expect(
+      refreshPreviewRevision({
+        snapshot,
+        compileTimeoutMs: DEFAULT_PREVIEW_COMPILE_TIMEOUT_MS + 1,
+        compile,
+        present: async () => receipt,
+        selection: { intent: 'presentation' }
+      })
+    ).rejects.toMatchObject({ code: 'compile-failed' });
+    expect(compile).not.toHaveBeenCalled();
+  });
+
   it('does not restore a selection cleared while compilation was pending', async () => {
     const calls: string[] = [];
     let epoch = 0;

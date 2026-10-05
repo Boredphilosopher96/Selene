@@ -217,6 +217,8 @@ test('studio launchpad supports keyboard templates, blank-name refusal and a lon
   const studio = await openStudio();
   try {
     const { page } = studio;
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.screenshot({ path: testInfo.outputPath('studio-launchpad-1280.png') });
     await page.setViewportSize({ width: 1180, height: 812 });
     await expect(page.getByText('Your next idea starts here', { exact: true })).toBeVisible();
     await expect(
@@ -283,6 +285,19 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
       timeout: 15_000
     });
     await expect(page.locator('.canvas-workspace')).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.getByRole('button', { name: 'Open AI conversation', exact: true }).click();
+    await page.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
+    expect(
+      (await page.locator('.canvas-workspace__toolbar').boundingBox())?.height
+    ).toBeLessThanOrEqual(50);
+    await expect(page.getByRole('button', { name: 'Hide AI rail', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Hide inspector', exact: true })).toBeVisible();
+    await expect(page.getByLabel('AI change instruction')).toHaveValue('');
+    await expect(page.locator('.conversation-composer__status')).toHaveText('');
+    await page.screenshot({ path: testInfo.outputPath('studio-both-rails-1280.png') });
+    await page.getByRole('button', { name: 'Hide AI rail', exact: true }).click();
+    await page.getByRole('button', { name: 'Hide inspector', exact: true }).click();
     await [1600, 1180, 1025, 1024, 768, 620, 390].reduce(async (previous, width) => {
       await previous;
       await page.setViewportSize({ width, height: 900 });
@@ -297,6 +312,28 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
         );
       });
       const headerGeometry = await captureHeaderGeometry(page);
+      await page.screenshot({ path: testInfo.outputPath(`studio-resize-before-${width}.png`) });
+      const toolbarGeometry = await page
+        .locator('.canvas-workspace__toolbar')
+        .evaluate((toolbar) => ({
+          bounds: toolbar.getBoundingClientRect().toJSON(),
+          clientWidth: toolbar.clientWidth,
+          scrollWidth: toolbar.scrollWidth,
+          columns: getComputedStyle(toolbar).gridTemplateColumns,
+          layout: document.querySelector('.workspace-layout')?.getAttribute('data-layout-mode'),
+          children: Array.from(toolbar.querySelectorAll('*')).map((element) => ({
+            tag: element.tagName,
+            label: element.textContent?.trim(),
+            className: element.getAttribute('class'),
+            bounds: element.getBoundingClientRect().toJSON(),
+            position: getComputedStyle(element).position,
+            width: getComputedStyle(element).width
+          }))
+        }));
+      await testInfo.attach(`studio-toolbar-geometry-${width}.json`, {
+        body: JSON.stringify(toolbarGeometry, null, 2),
+        contentType: 'application/json'
+      });
       await testInfo.attach(`studio-header-geometry-${width}.json`, {
         body: JSON.stringify(headerGeometry, null, 2),
         contentType: 'application/json'
@@ -307,6 +344,12 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
       expect(headerGeometry.overflow).toEqual([]);
       await expectContained(page, '.canvas-workspace__toolbar');
       await expectContained(page, '.canvas-workspace__tools');
+      await expectContained(page, '.canvas-workspace__footer');
+      await expectContained(page, '.canvas-workspace__navigation');
+      if (width === 390)
+        expect(
+          (await page.locator('.canvas-workspace__toolbar').boundingBox())?.height
+        ).toBeLessThanOrEqual(84);
       await Promise.all(
         [
           'Design',
@@ -315,11 +358,17 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
           'Connections',
           'Hand',
           'Fit all',
-          'Reset',
+          'Fit pages',
           'Fit selection',
           'Selection',
-          '@ Ask AI'
-        ].map((name) => expect(tools.getByRole('button', { name, exact: true })).toBeVisible())
+          'Ask AI'
+        ].map((name) =>
+          expect(
+            page
+              .getByLabel('Design canvas', { exact: true })
+              .getByRole('button', { name, exact: true })
+          ).toBeVisible()
+        )
       );
       await expect(
         page.getByRole('button', { name: 'Open AI conversation', exact: true })
@@ -327,8 +376,8 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
       await expect(
         page.getByRole('button', { name: 'Open Dev Inspect', exact: true })
       ).toBeVisible();
-      await expect(page.locator('.canvas-workspace__toolbar > output')).toBeVisible();
-      await expectContained(page, '.canvas-workspace__toolbar > output');
+      await expect(page.locator('.canvas-workspace__status')).toBeVisible();
+      await expectContained(page, '.canvas-workspace__status');
       await page.screenshot({ path: testInfo.outputPath(`studio-canvas-${width}.png`) });
     }, Promise.resolve());
     // Simulate wider native glyph metrics within this disposable document,
@@ -436,6 +485,9 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
     await expect(rightResizer).toHaveAttribute('aria-valuenow', '340');
     await expectContained(page, '.canvas-workspace__toolbar');
     await page.getByRole('button', { name: 'Fit all', exact: true }).click();
+    await expect(
+      page.locator('.canvas-artboard--reference .canvas-artboard__label code').first()
+    ).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath('studio-inspector-wide.png') });
     await expectAccessible(page);
     await page.locator('main').evaluate((element) => {
@@ -475,8 +527,16 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
     await page.setViewportSize({ width: 390, height: 900 });
     await page.getByRole('button', { name: 'Open Dev Inspect', exact: true }).click();
     await expect(page.getByRole('tabpanel', { name: 'Inspect' })).toBeVisible();
-    await expect(page.getByText('Explore the details', { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(
+        'Select a rendered element to see its layout, source and editable properties.',
+        { exact: true }
+      )
+    ).toBeVisible();
     await expectContained(page, '.dev-inspector__empty');
+    expect((await page.locator('.dev-inspector[data-empty]').boundingBox())?.height).toBeLessThan(
+      90
+    );
     const search = page.getByRole('searchbox', { name: 'Search inspect context' });
     await search.fill('AI edit');
     await expect(page.getByText(/No inspect context matches/)).toBeVisible();
@@ -495,7 +555,7 @@ test('studio canvas keeps grouped tools, panel actions and save feedback reachab
     await fit.focus();
     await fit.press('Enter');
     await expect(fit).toBeFocused();
-    await expect(page.locator('.canvas-workspace__toolbar > output')).not.toHaveText('');
+    await expect(page.locator('.canvas-workspace__status')).not.toHaveText('');
   } finally {
     await closeStudio(studio);
   }
@@ -525,7 +585,7 @@ test('presentation returns to a painted authoring artboard after Exit and Escape
       await expect(presentation.getByRole('button', { name: /Exit/ })).toBeFocused();
       const presentationUrl = await frame.getAttribute('src');
       if (dismissal === 'Exit') {
-        await prototype.getByRole('button', { name: 'Open orders', exact: true }).click();
+        await prototype.locator('button[data-selene-action-port="open-orders"]').click();
         await expect(heading).toHaveText(/Orders/);
         await prototype.locator('button[data-selene-action-port="back"]').click();
         await expect(dashboard).toBeVisible();
@@ -578,7 +638,7 @@ test('presentation returns to a painted authoring artboard after Exit and Escape
     await refuseNextPreviewBuild();
     await presentation.getByRole('button', { name: /Exit/ }).click();
     await expect(canvas).toBeVisible();
-    await expect(canvas.locator('.canvas-workspace__toolbar > output')).toHaveText(
+    await expect(canvas.locator('.canvas-workspace__status')).toHaveText(
       'Editor restored; the preview could not refresh. Use Render to try again.'
     );
     const committed = await page.evaluate(() => window.selene.designer.snapshot());
@@ -628,7 +688,14 @@ test('presentation returns to a painted authoring artboard after Exit and Escape
         const remaining = requestedModes.slice();
         ipcMain.removeHandler(channel);
         ipcMain.handle(channel, (...args) => {
-          if (args[1] !== remaining[0]) return Reflect.apply(original, ipcMain, args);
+          const payload: unknown = args[1];
+          const mode =
+            typeof payload === 'string'
+              ? payload
+              : payload !== null && typeof payload === 'object'
+                ? Reflect.get(payload, 'mode')
+                : undefined;
+          if (mode !== remaining[0]) return Reflect.apply(original, ipcMain, args);
           remaining.shift();
           if (remaining.length === 0) {
             ipcMain.removeHandler(channel);

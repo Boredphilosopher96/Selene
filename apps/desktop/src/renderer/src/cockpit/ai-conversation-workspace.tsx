@@ -12,6 +12,7 @@ import type {
   DesignerSnapshot
 } from '../../../shared/designer-api';
 import { presentDesignerError, safeDesignerNotice } from '../presentation-error';
+import { StudioIcon } from './studio-icon';
 import { applyAiProposalDecision, presentAiCancellationFailure } from './ai-proposal-presentation';
 import {
   canApplyConversationOperation,
@@ -57,6 +58,7 @@ export interface AIConversationWorkspaceProps {
   readonly onBusyChange: (busy: boolean) => void;
   readonly onSelectOnCanvas: () => void;
   readonly onTargetClear: () => void;
+  readonly onOpenSetup?: () => void;
 }
 
 function isAbort(error: unknown): boolean {
@@ -86,9 +88,10 @@ export function AIConversationWorkspace({
   onStatusChange,
   onBusyChange,
   onSelectOnCanvas,
-  onTargetClear
+  onTargetClear,
+  onOpenSetup
 }: AIConversationWorkspaceProps) {
-  const [instruction, setInstruction] = useState('Clarify the primary action.');
+  const [instruction, setInstruction] = useState('');
   const [aiSubmitting, setAiSubmitting] = useState(false);
   const [selectionMinting, setSelectionMinting] = useState(false);
   const [cancellingRequestId, setCancellingRequestId] = useState<string | undefined>(undefined);
@@ -590,6 +593,7 @@ export function AIConversationWorkspace({
     <>
       <section
         className="conversation-history"
+        data-empty={snapshot.designActivity.length === 0 || undefined}
         aria-label="Design activity and AI conversation history"
         aria-description="Use Tab to focus the conversation history, then use Arrow keys or Page Up and Page Down to scroll it."
         ref={historyRef}
@@ -597,13 +601,15 @@ export function AIConversationWorkspace({
         tabIndex={0}
       >
         <header className="conversation-history__header">
-          <span className="agent-orb" aria-hidden="true" />
+          <span className="agent-orb" aria-hidden="true">
+            <StudioIcon name="sparkles" />
+          </span>
           <div>
             <p className="conversation-history__eyebrow">Local copilot</p>
             <h2>Design activity</h2>
             <p>
               {snapshot.agents.length === 0
-                ? 'Agent setup is offline or incomplete'
+                ? 'Your local design history'
                 : `${snapshot.agents.length} configured ${snapshot.agents.length === 1 ? 'agent' : 'agents'} · ${selectedAgent?.label ?? 'No agent selected'}`}
             </p>
           </div>
@@ -613,17 +619,22 @@ export function AIConversationWorkspace({
             className="conversation-state conversation-state--offline"
             aria-label="Agent unavailable"
           >
-            <strong>Agent unavailable</strong>
+            <strong>Connect your design agent</strong>
             <p>
-              Finish trusted agent setup before sending a design change. Previous conversation
-              remains local.
+              Configure a trusted agent in Setup to start making AI changes. Your design and
+              previous conversation stay local.
             </p>
+            {onOpenSetup ? (
+              <button type="button" onClick={onOpenSetup}>
+                Open agent setup
+              </button>
+            ) : null}
           </section>
         ) : null}
-        {snapshot.designActivity.length === 0 ? (
+        {snapshot.designActivity.length === 0 && snapshot.agents.length > 0 ? (
           <section className="conversation-state conversation-state--empty">
-            <strong>Start with a request</strong>
-            <p>Make a direct canvas edit or describe a change for a configured local agent.</p>
+            <strong>Your design history starts here</strong>
+            <p>Canvas edits and AI proposals will appear here, with review and undo controls.</p>
           </section>
         ) : (
           <>
@@ -1088,11 +1099,8 @@ export function AIConversationWorkspace({
       >
         <header className="conversation-composer__header">
           <p className="conversation-history__eyebrow">Design with AI</p>
-          <h2>Create an AI design change</h2>
-          <p>
-            Choose an agent, describe the update, then select a current compiler-authenticated
-            rendered React element.
-          </p>
+          <h2>Make a design change</h2>
+          <p>Describe the change, then choose the rendered element it should affect.</p>
         </header>
         <label>
           Configured agent
@@ -1112,6 +1120,7 @@ export function AIConversationWorkspace({
                 .catch((error: unknown) => onStatusChange(presentDesignerError(error, 'agent')))
             }
           >
+            {snapshot.agents.length === 0 ? <option value="">No agent configured</option> : null}
             {snapshot.agents.map((agent) => (
               <option key={agent.id} value={agent.id}>
                 {agent.label}
@@ -1124,17 +1133,18 @@ export function AIConversationWorkspace({
           <textarea
             aria-describedby="conversation-composer-reason"
             aria-label="AI change instruction"
-            disabled={conversationBusy}
+            disabled={conversationBusy || selectedAgent === undefined}
+            placeholder="Describe a change to your design…"
             value={instruction}
             onChange={(event) => setInstruction(event.currentTarget.value)}
             onKeyDown={onInstructionKeyDown}
           />
         </label>
-        <p className="conversation-composer__target-summary">
-          {target
-            ? `${currentTargetSummary ?? 'Selected compiler-authenticated React element'} is ready for this change.`
-            : 'No compiler-authenticated rendered React element is selected yet.'}
-        </p>
+        {target ? (
+          <p className="conversation-composer__target-summary">
+            {currentTargetSummary ?? 'Selected React element'} · ready for this change
+          </p>
+        ) : null}
         <div aria-label="AI change actions" className="conversation-composer__actions" role="group">
           <button
             className="conversation-composer__target"
@@ -1142,7 +1152,7 @@ export function AIConversationWorkspace({
             disabled={conversationBusy || selectedAgent === undefined}
             onClick={onSelectOnCanvas}
           >
-            Select rendered element
+            Select on canvas
           </button>
           {target ? (
             <button type="button" disabled={conversationBusy} onClick={onTargetClear}>
@@ -1170,14 +1180,17 @@ export function AIConversationWorkspace({
             {aiSubmitting ? 'Applying change…' : 'Send AI change'}
           </button>
         </div>
-        <p className="shortcut-hint">
-          ⌘/Ctrl + Enter sends; Enter adds a line; Escape clears the selected element.
-        </p>
+        <p className="shortcut-hint">⌘/Ctrl + Enter to send · Esc to clear the target</p>
         <p className="conversation-composer__reason" id="conversation-composer-reason">
-          {disabledReason ?? 'Ready to send this AI change for the selected element.'}
+          {disabledReason?.replace(
+            'Select a current compiler-authenticated rendered React element before sending it.',
+            'Select a rendered element on the canvas before sending.'
+          ) ?? 'Ready to send this AI change for the selected element.'}
         </p>
         <p className="conversation-composer__status" ref={statusRef} role="status" tabIndex={-1}>
-          {safeDesignerNotice(status, 'AI status is unavailable. Try the change again.')}
+          {status
+            ? safeDesignerNotice(status, 'AI status is unavailable. Try the change again.')
+            : ''}
         </p>
       </section>
     </>

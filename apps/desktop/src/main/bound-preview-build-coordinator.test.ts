@@ -3,10 +3,11 @@ import {
   type ReactCompilerPort,
   type ReactSourceWorkspace
 } from '@selene/core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   BoundPreviewBuildCoordinator,
+  DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS,
   type BoundPreviewBuildRequest
 } from './bound-preview-build-coordinator';
 
@@ -54,6 +55,102 @@ function artifact(revisionId: string): ReactBuildArtifact {
 }
 
 describe('BoundPreviewBuildCoordinator', () => {
+  it.each(['resolve', 'reject'] as const)(
+    'bounds a noncooperative compiler and consumes its late %s without retaining stale output',
+    async (settlement) => {
+      vi.useFakeTimers();
+      try {
+        let resolve!: (value: ReactBuildArtifact) => void;
+        let reject!: (error: unknown) => void;
+        let signal: AbortSignal | undefined;
+        let attempts = 0;
+        const compiler: ReactCompilerPort = {
+          compile: (source, currentSignal) => {
+            attempts += 1;
+            signal = currentSignal;
+            if (attempts > 1)
+              return Promise.resolve({ ...artifact(source.revision.id), code: 'fresh output' });
+            return new Promise<ReactBuildArtifact>((accept, fail) => {
+              resolve = accept;
+              reject = fail;
+            });
+          }
+        };
+        const coordinator = new BoundPreviewBuildCoordinator(compiler);
+        const first = coordinator.build(request());
+        const failed = expect(first).rejects.toThrow(/timed out/);
+        await vi.advanceTimersByTimeAsync(DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS);
+        await failed;
+        expect(signal?.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+        if (settlement === 'resolve')
+          resolve({ ...artifact('revision-a'), code: 'abandoned output' });
+        else reject(new Error('late compiler failure'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        await expect(coordinator.build(request())).resolves.toMatchObject({ code: 'fresh output' });
+        await expect(coordinator.build(request())).resolves.toMatchObject({ code: 'fresh output' });
+        expect(attempts).toBe(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('does not retain a completed artifact after its host lease is no longer active', async () => {
+    let active = true;
+    let attempts = 0;
+    const compiler: ReactCompilerPort = {
+      compile: async (source) => {
+        attempts += 1;
+        active = false;
+        return artifact(source.revision.id);
+      }
+    };
+    const coordinator = new BoundPreviewBuildCoordinator(compiler);
+    const guarded = {
+      ...request(),
+      assertActive: () => {
+        if (!active) throw new Error('Lease expired before retention');
+      }
+    };
+    await expect(coordinator.build(guarded)).rejects.toThrow(/expired before retention/);
+    await coordinator.build(request());
+    expect(attempts).toBe(2);
+  });
+
+  it('bounds shared never-settling work for every waiter and cleans its timer on clear', async () => {
+    vi.useFakeTimers();
+    try {
+      const compiler: ReactCompilerPort = {
+        compile: () => new Promise<ReactBuildArtifact>(() => undefined)
+      };
+      const coordinator = new BoundPreviewBuildCoordinator(compiler);
+      const first = coordinator.build(request());
+      const second = coordinator.build(request());
+      const failed = expect(Promise.all([first, second])).rejects.toMatchObject({
+        name: 'AbortError'
+      });
+      coordinator.clear();
+      await failed;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects a deadline that would relax the host compile budget', () => {
+    const compiler: ReactCompilerPort = { compile: async (source) => artifact(source.revision.id) };
+    expect(
+      () =>
+        new BoundPreviewBuildCoordinator(compiler, {
+          compileTimeoutMs: DEFAULT_BOUND_PREVIEW_COMPILE_TIMEOUT_MS + 1
+        })
+    ).toThrow(/timeout/);
+  });
+
   it('coalesces concurrent callers for one exact identity', async () => {
     let release: ((value: ReactBuildArtifact) => void) | undefined;
     let compilations = 0;

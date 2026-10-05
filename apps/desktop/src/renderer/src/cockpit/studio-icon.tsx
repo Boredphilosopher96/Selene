@@ -14,7 +14,9 @@ type StudioIconName =
   | 'folder'
   | 'arrow'
   | 'check'
-  | 'shield';
+  | 'shield'
+  | 'close'
+  | 'chevron';
 
 const paths: Record<StudioIconName, string> = {
   canvas: 'M4 4h16v16H4z M4 9h16 M9 9v11',
@@ -30,6 +32,8 @@ const paths: Record<StudioIconName, string> = {
   folder: 'M3 6h7l2 3h9v11H3z',
   arrow: 'M4 12h16 m-6-6 6 6-6 6',
   check: 'm5 12 4 4L19 6',
+  close: 'm6 6 12 12 M18 6 6 18',
+  chevron: 'm9 5 7 7-7 7',
   shield: 'm12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z m-4 9 3 3 5-6'
 };
 

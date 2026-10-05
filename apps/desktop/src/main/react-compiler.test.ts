@@ -47,6 +47,63 @@ describe('ViteReactCompilerPort', () => {
     ).toBe('react/jsx-runtime\ndetails');
   });
 
+  it('honors cancellation while the compiler runtime is loading without publishing a receipt', async () => {
+    const controller = new AbortController();
+    const compiling = new ViteReactCompilerPort().compile(
+      {
+        format: 'selene-react-workspace/v1',
+        projectId: 'cancel-runtime-load',
+        entrypoint: 'src/App.tsx',
+        files: [
+          {
+            path: 'src/App.tsx',
+            language: 'tsx',
+            content: 'export default function App() { return <main>Cancelled</main>; }'
+          }
+        ],
+        dependencies: [],
+        nodes: [{ nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' }],
+        revision: { id: 'r1', createdAt: '2026-07-23T00:00:00Z', summary: 'Cancelled load' }
+      },
+      controller.signal
+    );
+    controller.abort();
+    await expect(compiling).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('owns validated source and receipt identity before loading the runtime', async () => {
+    const workspace = {
+      format: 'selene-react-workspace/v1' as const,
+      projectId: 'owned-runtime-load',
+      entrypoint: 'src/App.tsx',
+      files: [
+        {
+          path: 'src/App.tsx',
+          language: 'tsx' as const,
+          content: 'export default function App() { return <main>Validated initial source</main>; }'
+        }
+      ],
+      dependencies: [],
+      nodes: [{ nodeId: 'app.root', path: 'src/App.tsx', exportName: 'default' }],
+      revision: { id: 'r1', createdAt: '2026-07-23T00:00:00Z', summary: 'Owned input' }
+    };
+    const initial = structuredClone(workspace);
+    const compiling = new ViteReactCompilerPort().compile(workspace);
+    workspace.files[0]!.content =
+      'void import("file:///private/unchecked.tsx"); export default function App() { return <main>Unchecked replacement</main>; }';
+    workspace.revision.id = 'unchecked-r2';
+    const result = await compiling;
+    expect(result.diagnostics).toEqual([]);
+    expect(result.code).toContain('Validated initial source');
+    expect(result.code).not.toContain('Unchecked replacement');
+    expect(result.revisionId).toBe(initial.revision.id);
+    expect(result.receipt?.sourceRevisionId).toBe(initial.revision.id);
+    const { serializeCanonicalData } = await import('@selene/core');
+    expect(result.receipt?.sourceSha256).toBe(
+      createHash('sha256').update(serializeCanonicalData(initial)).digest('hex')
+    );
+  });
+
   it('bundles multi-file TSX, TypeScript, CSS, and the React runtime in memory', async () => {
     const result = await new ViteReactCompilerPort().compile({
       format: 'selene-react-workspace/v1',

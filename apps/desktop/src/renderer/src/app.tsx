@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-
-import { DesktopCockpit } from './cockpit/desktop-cockpit';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
 import { refreshGuidedInput, withoutGuidedSelection } from './cockpit/guided-input-refresh';
 import { PreviewCanvasNavigation } from './cockpit/preview-canvas-navigation';
+import { closePreviewPort } from './cockpit/preview-port-lifecycle';
 import { PreviewTargetCancel } from './cockpit/preview-target-cancel';
 import {
   isPreviewSelectionAuthorized,
@@ -10,6 +18,7 @@ import {
   shouldClearPreviewTelemetry
 } from './cockpit/preview-telemetry-state';
 import { ProjectLaunchpad } from './cockpit/project-launchpad';
+import { ProjectPresentationError } from './cockpit/project-presentation-error';
 import { WorkspaceToolbar } from './cockpit/workspace-toolbar';
 import {
   previewInteractionFailureNotice,
@@ -18,6 +27,7 @@ import {
   type PreviewInteractionFailure
 } from './presentation-error';
 import {
+  compilePreviewWithinDeadline,
   isActivePreviewFrameEvent,
   PreviewPresentationCoordinator,
   PreviewRefreshError,
@@ -28,6 +38,11 @@ import {
   samePreviewPresentationIdentity,
   type PreviewPresentationIdentity
 } from './cockpit/preview-refresh';
+import { compileReservedPreview } from './cockpit/preview-build-lease';
+import {
+  PreviewProjectOwner,
+  type PreviewProjectOwnerIdentity
+} from './cockpit/preview-project-owner';
 import {
   PREVIEW_CANVAS_GESTURE_EVENT,
   PREVIEW_TARGET_CANCEL_EVENT,
@@ -55,6 +70,22 @@ import {
 import { DESKTOP_PRELOAD_API_VERSION } from '../../shared/desktop-api';
 
 type BuildResult = Awaited<ReturnType<Window['selene']['preview']['buildAIProposal']>>;
+
+// Launchpad startup does not need the graph editor, inspector, or artboard tools.
+// Opening a project loads them alongside its first compile, rather than moving
+// the entire parse cost to the end of that compile. Failed loads can be retried.
+let cockpitModule: Promise<typeof import('./cockpit/desktop-cockpit')> | undefined;
+let cockpitReloadRequired = false;
+function loadDesktopCockpit() {
+  cockpitModule ??= import('./cockpit/desktop-cockpit').catch((error: unknown) => {
+    cockpitModule = undefined;
+    // Vite's dependency preloader can retain a failed stylesheet entry. A
+    // fresh document is the safe boundary for retrying both JS and CSS.
+    cockpitReloadRequired = true;
+    throw error;
+  });
+  return cockpitModule.then((module) => ({ default: module.DesktopCockpit }));
+}
 
 interface PendingPreviewSelection {
   readonly nodeId: string;
@@ -211,6 +242,8 @@ function postPreviewRuntimeState(
 
 /** Electron orchestration only: all product visuals live in DesktopCockpit. */
 export function App() {
+  // A document-level recovery creates a fresh lazy resource after a load error.
+  const [DesktopCockpit] = useState(() => lazy(loadDesktopCockpit));
   const [snapshot, setSnapshot] = useState<DesignerSnapshot>();
   const [build, setBuild] = useState<BuildResult>();
   // Channel state is evidence, not product state. Updating it must never
@@ -251,6 +284,9 @@ export function App() {
     | 'host-failed'
   >('idle');
   const currentSnapshot = useRef<DesignerSnapshot | undefined>(undefined);
+  /** Chosen host ownership must not be overwritten by the still-mounted old cockpit. */
+  const projectOwner = useRef(new PreviewProjectOwner());
+  const [committedProjectOwner, setCommittedProjectOwner] = useState<PreviewProjectOwnerIdentity>();
   const framePort = useRef<MessagePort | null>(null);
   const currentBuild = useRef<BuildResult | undefined>(undefined);
   const canonicalPreviewBuild = useRef<BuildResult | undefined>(undefined);
@@ -316,8 +352,7 @@ export function App() {
   }, []);
   const publishPreviewBuild = useCallback(
     (nextBuild: BuildResult) => {
-      framePort.current?.close();
-      framePort.current = null;
+      closePreviewPort(framePort);
       previewCanvasNavigation.current?.previewUnavailable();
       previewTargetCancel.current?.previewUnavailable();
       activePreviewIdentity.current = previewIdentity(nextBuild);
@@ -495,7 +530,12 @@ export function App() {
   /** Project selection and publish consent are mutually exclusive host transitions. */
   const projectSwitchInFlight = useRef(false);
   const deliveryActionInFlight = useRef(false);
-  currentSnapshot.current = snapshot;
+  if (
+    snapshot !== undefined &&
+    projectOwner.current.isCurrent(committedProjectOwner) &&
+    projectOwner.current.ownsProject(snapshot.source.projectId)
+  )
+    currentSnapshot.current = snapshot;
   const compile = useCallback(
     async (next: DesignerSnapshot, signal?: AbortSignal): Promise<BuildResult> => {
       if (signal?.aborted)
@@ -507,24 +547,31 @@ export function App() {
       const ticket = next.editablePrototype.previewTicket;
       if (ticket === undefined)
         throw new Error('The host has not issued a current React preview identity.');
-      const result = await window.selene.preview.build(ticket);
-      if (signal?.aborted)
-        throw new PreviewRefreshError(
-          'refresh-aborted',
-          next.source.revision.id,
-          'The refresh was cancelled during compilation'
-        );
-      if (!validCanonicalBuild(result, ticket))
-        throw new Error('Preview host returned an invalid preview build');
-      return result;
+      return compileReservedPreview({
+        ticket,
+        port: window.selene.preview,
+        ...(signal === undefined ? {} : { signal }),
+        validate: validCanonicalBuild
+      });
     },
     []
   );
   const render = useCallback(
     async (
       next: DesignerSnapshot,
-      intent: 'authoring' | 'presentation' = 'authoring'
+      intent: 'authoring' | 'presentation' = 'authoring',
+      callerSignal?: AbortSignal
     ): Promise<void> => {
+      if (
+        callerSignal?.aborted ||
+        !projectOwner.current.isCurrent(committedProjectOwner) ||
+        !projectOwner.current.ownsProject(next.source.projectId)
+      )
+        throw new PreviewRefreshError(
+          'refresh-aborted',
+          next.source.revision.id,
+          'The refresh was cancelled'
+        );
       activePreviewRefresh.current?.abort();
       // A replacement iframe can load before React commits the corresponding
       // snapshot. Seed the same host-confirmed state that requested this
@@ -534,6 +581,9 @@ export function App() {
       const renderedInitialRuntime = initialRuntimeState(next);
       const selectionEpoch = previewSelectionEpoch.current;
       const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      callerSignal?.addEventListener('abort', onAbort, { once: true });
+      if (callerSignal?.aborted) controller.abort();
       activePreviewRefresh.current = controller;
       try {
         const refreshed = await refreshPreviewRevision({
@@ -560,6 +610,17 @@ export function App() {
                 },
           signal: controller.signal
         });
+        if (
+          controller.signal.aborted ||
+          activePreviewRefresh.current !== controller ||
+          !projectOwner.current.isCurrent(committedProjectOwner) ||
+          !projectOwner.current.ownsProject(next.source.projectId)
+        )
+          throw new PreviewRefreshError(
+            'refresh-aborted',
+            next.source.revision.id,
+            'The preview no longer owns the current project'
+          );
         const activePort = framePort.current;
         if (
           activePort &&
@@ -578,10 +639,11 @@ export function App() {
         );
         setNotice('Preview updated.');
       } finally {
+        callerSignal?.removeEventListener('abort', onAbort);
         if (activePreviewRefresh.current === controller) activePreviewRefresh.current = undefined;
       }
     },
-    [compile, presentPreviewBuild, enqueuePreviewSelectionHostOperation]
+    [compile, presentPreviewBuild, enqueuePreviewSelectionHostOperation, committedProjectOwner]
   );
   const previewAIProposal = useCallback(
     async (input: AIProposalDecisionInput): Promise<void> => {
@@ -624,14 +686,33 @@ export function App() {
     projectSwitchInFlight.current = busy;
     setProjectSwitching(busy);
   }, []);
+  const isCurrentProjectOwner = useCallback(
+    (projectId: string) =>
+      projectOwner.current.isCurrent(committedProjectOwner) &&
+      projectOwner.current.ownsProject(projectId),
+    [committedProjectOwner]
+  );
   const openProject = useCallback(
     async (opened: ProjectOpenResult) => {
+      let acceptedProject = false;
+      let controller: AbortController | undefined;
+      let chosenOwner: PreviewProjectOwnerIdentity | undefined;
       try {
         if (publishStartInFlight.current || publishActiveRef.current)
           throw new Error(
             'Finish or cancel the active publish operation before switching projects.'
           );
         assertDesignerApiVersion(opened.snapshot.apiVersion);
+        if (cockpitReloadRequired) {
+          // This is an explicit saved-project reopen after a resource failure.
+          // The host owns this chosen project; startup resumes it after reload.
+          // Do not auto-reload the failed attempt or create a retry loop.
+          setNotice('Reloading the saved project’s design tools…');
+          window.selene.workspace.reload();
+          return;
+        }
+        acceptedProject = true;
+        chosenOwner = projectOwner.current.choose(opened.snapshot.source.projectId);
         setNotice(`Opening ${opened.receipt.name}…`);
         publishGeneration.current += 1;
         canonicalPreviewBuild.current = undefined;
@@ -641,21 +722,66 @@ export function App() {
         setPublishStatus('No publish operation started for this project.');
         setSelectedPreviewTelemetry(undefined);
         activePreviewRefresh.current?.abort();
-        activePreviewRefresh.current = undefined;
+        controller = new AbortController();
+        activePreviewRefresh.current = controller;
         previewPresentation.close();
         // The next frame must initialize from this exact host snapshot, even
         // when React has not committed the project switch yet.
         currentSnapshot.current = opened.snapshot;
-        const nextBuild = await compile(opened.snapshot);
+        const [nextBuild] = await Promise.all([
+          compilePreviewWithinDeadline({
+            snapshot: opened.snapshot,
+            compile,
+            signal: controller.signal
+          }),
+          loadDesktopCockpit()
+        ]);
+        if (
+          controller.signal.aborted ||
+          activePreviewRefresh.current !== controller ||
+          !projectOwner.current.isCurrent(chosenOwner)
+        )
+          throw new PreviewRefreshError(
+            'refresh-aborted',
+            opened.snapshot.source.revision.id,
+            'The project preview was cancelled'
+          );
         capturePreviewInitialRuntime(nextBuild, initialRuntimeState(opened.snapshot));
+        setCommittedProjectOwner(chosenOwner);
         setSnapshot(opened.snapshot);
         publishPreviewBuild(nextBuild);
         setNotice(`${opened.receipt.name} is ready.`);
       } catch (error) {
+        if (acceptedProject) {
+          // A replaced open cannot clear the fresh owner's controller or UI.
+          if (!projectOwner.current.isCurrent(chosenOwner)) throw error;
+          // The host now owns the newly opened project. Never keep the prior
+          // project's chrome or authenticated frame visible after a load failure.
+          activePreviewRefresh.current?.abort();
+          previewPresentation.close();
+          closePreviewPort(framePort);
+          currentBuild.current = undefined;
+          currentSnapshot.current = undefined;
+          projectOwner.current.clear();
+          activePreviewIdentity.current = undefined;
+          previewPendingSelection.current = undefined;
+          previewSelectionEpoch.current += 1;
+          previewCanvasNavigation.current?.previewUnavailable();
+          previewTargetCancel.current?.previewUnavailable();
+          setPreviewChannelDiagnostic('unavailable');
+          setBuild(undefined);
+          setSnapshot(undefined);
+          const presentationError = new ProjectPresentationError();
+          setNotice(presentationError.message);
+          throw presentationError;
+        }
         setNotice(presentDesignerError(error, 'preview'));
         throw error;
       } finally {
-        setProjectSwitchBusy(false);
+        const ownsOpen = activePreviewRefresh.current === controller;
+        if (ownsOpen) activePreviewRefresh.current = undefined;
+        if (chosenOwner === undefined || ownsOpen || projectOwner.current.isCurrent(chosenOwner))
+          setProjectSwitchBusy(false);
       }
     },
     [
@@ -663,6 +789,7 @@ export function App() {
       compile,
       previewPresentation,
       publishPreviewBuild,
+      setPreviewChannelDiagnostic,
       setProjectSwitchBusy
     ]
   );
@@ -795,8 +922,7 @@ export function App() {
 
   useEffect(
     () => () => {
-      framePort.current?.close();
-      framePort.current = null;
+      closePreviewPort(framePort);
     },
     [build?.revisionId, build?.policy.nonce, build?.url]
   );
@@ -805,6 +931,7 @@ export function App() {
     () => () => {
       activePreviewRefresh.current?.abort();
       activePreviewRefresh.current = undefined;
+      projectOwner.current.clear();
       activePreviewIdentity.current = undefined;
       previewPresentation.close();
     },
@@ -1017,7 +1144,7 @@ export function App() {
     }
     setPreviewChannelDiagnostic('connecting');
     setPreviewSelectionStage('idle');
-    framePort.current?.close();
+    closePreviewPort(framePort);
     previewSelectionInteractionSequence.current = 0;
     const channel = new MessageChannel();
     const channelIsActive = () =>
@@ -1197,8 +1324,7 @@ export function App() {
     previewPendingSelection.current = undefined;
     setSelectedPreviewTelemetry(undefined);
     setPreviewDirectSelectionAuthorized(false);
-    framePort.current?.close();
-    framePort.current = null;
+    closePreviewPort(framePort);
     setPreviewChannelDiagnostic('unavailable');
     previewCanvasNavigation.current?.previewUnavailable();
     previewTargetCancel.current?.previewUnavailable();
@@ -1386,6 +1512,9 @@ export function App() {
       cockpitPreferenceFlushActive.current = false;
     });
   };
+  const activeProjectName =
+    snapshot.productMap?.projects.find((project) => project.projectId === snapshot.source.projectId)
+      ?.name ?? snapshot.source.projectId;
   return (
     <main
       ref={workspaceRoot}
@@ -1400,11 +1529,11 @@ export function App() {
           <span className="brand-mark">S</span>
           <span className="workspace-product-title">Selene</span>
           <span
-            aria-label={`Active project: ${snapshot.source.projectId}`}
+            aria-label={`Active project: ${activeProjectName}`}
             className="project-kicker"
-            title={snapshot.source.projectId}
+            title={`${activeProjectName} · ${snapshot.source.projectId}`}
           >
-            Project · {snapshot.source.projectId}
+            {activeProjectName}
           </span>
         </div>
         <div className="project-actions">
@@ -1442,66 +1571,75 @@ export function App() {
         <p className="workspace-notice" role="status">
           {safeDesignerNotice(notice, 'Workspace status is unavailable. Try again.')}
         </p>
-        <p className="workspace-notice" aria-live="polite">
+        <p
+          className="workspace-notice workspace-notice--publish"
+          aria-live="polite"
+          hidden={publishStatus.startsWith('No publish operation started')}
+        >
           {safeDesignerNotice(publishStatus, 'Publish status is unavailable. Try again.')}
         </p>
       </div>
-      <DesktopCockpit
-        snapshot={snapshot}
-        {...(build === undefined ? {} : { build })}
-        describePreview={window.selene.preview.describe}
-        frame={frame}
-        onFrameLoad={connectPreviewFrame}
-        onFrameError={handlePreviewFrameError}
-        onSnapshot={setSnapshot}
-        onRender={render}
-        onPreviewAIProposal={previewAIProposal}
-        onPreviewCurrentRevision={previewCurrentRevision}
-        onBuildStoryPreview={window.selene.preview.buildStory}
-        onPreviewSelectionClear={clearPreviewSelection}
-        onCanvasNavigationChange={updateCanvasNavigation}
-        onPreviewTargetCancelChange={updatePreviewTargetCancel}
-        manualTextEditor={window.selene.designer}
-        {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
-        previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
-        previewSelectionClearEpoch={previewSelectionClearEpoch}
-        {...(progress === undefined ? {} : { progress })}
-        preferences={cockpitPreferences}
-        onPreferencesChange={saveCockpitPreferences}
-        guidedActions={guidedActions}
-        actions={{
-          snapshot: window.selene.designer.snapshot,
-          selectNode: (nodeId) => {
-            previewSelectionEpoch.current += 1;
-            previewPendingSelection.current = undefined;
-            previewSelectionSuppressed.current = false;
-            setSelectedPreviewTelemetry(undefined);
-            setPreviewDirectSelectionAuthorized(false);
-            return enqueuePreviewSelectionHostOperation(() =>
-              window.selene.designer.selectNode(nodeId)
-            );
-          },
-          selectAgent: window.selene.designer.selectAgent,
-          requestAIChange: window.selene.designer.requestAIChange,
-          acceptAIProposal: window.selene.designer.acceptAIProposal,
-          rejectAIProposal: window.selene.designer.rejectAIProposal,
-          cancelAIChange: window.selene.designer.cancel,
-          undoLastAIChange: window.selene.designer.undoLastAIChange,
-          undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
-          redoLatestManualDesignEdit: window.selene.designer.redoLatestManualDesignEdit,
-          mintArtifactSelectionReceipt: window.selene.designer.mintArtifactSelectionReceipt,
-          addReviewThread: window.selene.designer.addReviewThread,
-          resolveReviewThread: window.selene.designer.resolveReviewThread,
-          replyToReviewThread: window.selene.designer.replyToReviewThread,
-          addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation,
-          savePrototypeGraph,
-          retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration,
-          recoverPrototypeGraphFromFixture: window.selene.designer.recoverPrototypeGraphFromFixture,
-          setPrototypeMode: window.selene.designer.setPrototypeMode,
-          startPrototypeScenario: window.selene.designer.startPrototypeScenario,
-          resetPrototypeRun: window.selene.designer.resetPrototypeRun
-        }}
-      />
+      <Suspense fallback={<p role="status">Preparing your design tools…</p>}>
+        <DesktopCockpit
+          key={committedProjectOwner?.epoch ?? 0}
+          snapshot={snapshot}
+          {...(build === undefined ? {} : { build })}
+          describePreview={window.selene.preview.describe}
+          frame={frame}
+          onFrameLoad={connectPreviewFrame}
+          onFrameError={handlePreviewFrameError}
+          onSnapshot={setSnapshot}
+          onRender={render}
+          isCurrentProjectOwner={isCurrentProjectOwner}
+          onPreviewAIProposal={previewAIProposal}
+          onPreviewCurrentRevision={previewCurrentRevision}
+          onBuildStoryPreview={window.selene.preview.buildStory}
+          onPreviewSelectionClear={clearPreviewSelection}
+          onCanvasNavigationChange={updateCanvasNavigation}
+          onPreviewTargetCancelChange={updatePreviewTargetCancel}
+          manualTextEditor={window.selene.designer}
+          {...(selectedPreviewTelemetry === undefined ? {} : { selectedPreviewTelemetry })}
+          previewDirectSelectionAuthorized={previewDirectSelectionAuthorized}
+          previewSelectionClearEpoch={previewSelectionClearEpoch}
+          {...(progress === undefined ? {} : { progress })}
+          preferences={cockpitPreferences}
+          onPreferencesChange={saveCockpitPreferences}
+          guidedActions={guidedActions}
+          actions={{
+            snapshot: window.selene.designer.snapshot,
+            selectNode: (nodeId) => {
+              previewSelectionEpoch.current += 1;
+              previewPendingSelection.current = undefined;
+              previewSelectionSuppressed.current = false;
+              setSelectedPreviewTelemetry(undefined);
+              setPreviewDirectSelectionAuthorized(false);
+              return enqueuePreviewSelectionHostOperation(() =>
+                window.selene.designer.selectNode(nodeId)
+              );
+            },
+            selectAgent: window.selene.designer.selectAgent,
+            requestAIChange: window.selene.designer.requestAIChange,
+            acceptAIProposal: window.selene.designer.acceptAIProposal,
+            rejectAIProposal: window.selene.designer.rejectAIProposal,
+            cancelAIChange: window.selene.designer.cancel,
+            undoLastAIChange: window.selene.designer.undoLastAIChange,
+            undoLatestManualDesignEdit: window.selene.designer.undoLatestManualDesignEdit,
+            redoLatestManualDesignEdit: window.selene.designer.redoLatestManualDesignEdit,
+            mintArtifactSelectionReceipt: window.selene.designer.mintArtifactSelectionReceipt,
+            addReviewThread: window.selene.designer.addReviewThread,
+            resolveReviewThread: window.selene.designer.resolveReviewThread,
+            replyToReviewThread: window.selene.designer.replyToReviewThread,
+            addDeveloperAnnotation: window.selene.designer.addDeveloperAnnotation,
+            savePrototypeGraph,
+            retryPrototypeGraphHydration: window.selene.designer.retryPrototypeGraphHydration,
+            recoverPrototypeGraphFromFixture:
+              window.selene.designer.recoverPrototypeGraphFromFixture,
+            setPrototypeMode: window.selene.designer.setPrototypeMode,
+            startPrototypeScenario: window.selene.designer.startPrototypeScenario,
+            resetPrototypeRun: window.selene.designer.resetPrototypeRun
+          }}
+        />
+      </Suspense>
     </main>
   );
 }

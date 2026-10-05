@@ -3,7 +3,7 @@ import { lstatSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isAbsolute, posix, relative, resolve, sep } from 'node:path';
 
-import { build, type Plugin } from 'vite';
+import type { Plugin } from 'vite';
 
 import {
   type ReactBuildArtifact,
@@ -14,6 +14,7 @@ import {
   validateReactSourceWorkspace
 } from '@selene/core';
 import { digestReactBuildOutput } from './react-build-output-digest';
+import { runPreviewCompileWithDeadline } from './preview-compile-deadline';
 
 const entryId = 'selene-preview-entry';
 const sourcePrefix = 'selene-preview-source:';
@@ -319,12 +320,30 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
     workspace: ReactSourceWorkspace,
     signal?: AbortSignal
   ): Promise<ReactBuildArtifact> {
+    // Own the input before the first asynchronous runtime/build boundary. The
+    // caller cannot swap unchecked source or revision data into a validated build.
+    workspace = structuredClone(workspace);
     const governedModules = this.governedModules.snapshot();
     validateReactSourceWorkspace(workspace, {
       allowedBareDependencies: [...governedModules.keys()]
     });
+    return runPreviewCompileWithDeadline(
+      (compileSignal) => this.compileWorkspace(workspace, governedModules, compileSignal),
+      signal
+    );
+  }
+
+  private async compileWorkspace(
+    workspace: ReactSourceWorkspace,
+    governedModules: ReadonlyMap<string, Readonly<ApprovedDesignSystemCompilerModule>>,
+    signal: AbortSignal
+  ): Promise<ReactBuildArtifact> {
     if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
     try {
+      // The launchpad never compiles source. Load Vite only after the workspace
+      // and dependency authority have been checked, preserving first-build receipts.
+      const { build } = await import('vite');
+      if (signal?.aborted) throw new DOMException('Build cancelled', 'AbortError');
       const reachableFiles = new Set<string>();
       const output = (await build({
         configFile: false,
