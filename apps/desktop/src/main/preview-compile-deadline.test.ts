@@ -7,7 +7,7 @@ import {
 
 describe('Vite compiler adapter deadline', () => {
   it.each(['resolve', 'reject'] as const)(
-    'releases a never-settling operation and consumes its late %s',
+    'settles the caller of a held operation and consumes its late %s',
     async (settlement) => {
       vi.useFakeTimers();
       try {

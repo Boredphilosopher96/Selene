@@ -13,6 +13,12 @@ source edits, graph edits, and binding changes therefore invalidate an outstandi
 bounded cache is keyed by project, source revision, graph revision, binding commitment, and
 workspace digest. A failed compile has no cross-project or cross-revision last-good fallback.
 
+The main-process `ViteReactCompilerPort` admits one actual compiler operation at a time, including
+lazy runtime loading. A timeout or cancellation releases its caller promptly, but Vite may continue
+internally. Admission stays occupied until that operation actually settles; intervening requests
+receive a retry-later error immediately rather than joining a queue. Abandoned output is never
+attested, retained, or published. Once the operation settles, a fresh request can compile normally.
+
 The sandbox receives its initial validated prototype state with the nonce/revision-bound
 `selene-preview-init` message before generated React mounts. The root remains hidden until the
 initial state is installed, React commits visible content, and paint boundaries have completed.

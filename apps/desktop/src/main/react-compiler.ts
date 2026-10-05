@@ -312,6 +312,8 @@ function virtualWorkspacePlugin(
 
 /** A real in-memory Vite bundle; source is never written or evaluated in Electron main. */
 export class ViteReactCompilerPort implements ReactCompilerPort {
+  private compiling = false;
+
   public constructor(
     private readonly governedModules: ApprovedDesignSystemCompilerRegistry = new ApprovedDesignSystemCompilerRegistry()
   ) {}
@@ -327,10 +329,20 @@ export class ViteReactCompilerPort implements ReactCompilerPort {
     validateReactSourceWorkspace(workspace, {
       allowedBareDependencies: [...governedModules.keys()]
     });
-    return runPreviewCompileWithDeadline(
-      (compileSignal) => this.compileWorkspace(workspace, governedModules, compileSignal),
-      signal
-    );
+    return runPreviewCompileWithDeadline((compileSignal) => {
+      // Vite cannot interrupt an in-process build. Keep admission occupied
+      // until the actual work settles, even after its caller times out or
+      // cancels; retries fail promptly instead of accumulating a build queue.
+      if (this.compiling)
+        throw new DOMException(
+          'Preview compiler is still finishing a previous build. Retry shortly.',
+          'AbortError'
+        );
+      this.compiling = true;
+      return this.compileWorkspace(workspace, governedModules, compileSignal).finally(() => {
+        this.compiling = false;
+      });
+    }, signal);
   }
 
   private async compileWorkspace(
